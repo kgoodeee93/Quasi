@@ -27,8 +27,9 @@ cp .env.example .env                   # git-ignored, add API keys
 
 | Wallet `type` | What it reads | Needs |
 |---|---|---|
-| `evm` | Native coin + every ERC-20 on `ethereum`, `base`, `arbitrum`, `optimism`, `polygon` | `ALCHEMY_API_KEY` for tokens (free tier works). Without it, only ETH/POL. |
+| `evm` | Native coin + ERC-20s on `ethereum`, `base`, `arbitrum`, `optimism`, `polygon`, `robinhood` (Robinhood Chain), `arc` (Circle's Arc, where USDC is the gas coin), `hyperevm` | Nothing. Tokens come from Alchemy if `ALCHEMY_API_KEY` is set, else Blockscout, else a Multicall3 `balanceOf` scan over every token CoinGecko lists on that chain. An Alchemy key makes it faster and more reliable. |
 | `solana` | SOL + SPL + Token-2022 tokens | Nothing (public RPC). Set `SOLANA_RPC_URL` (Helius, QuickNode) if you get rate-limited. |
+| `hyperliquid` | HyperCore spot balances, perp account equity, staked HYPE, vault deposits | Nothing (public info API) |
 | `bitcoin` | Balance of one or more addresses (`addresses: [...]`) | Nothing (mempool.space) |
 | `manual` | Coins held on exchanges (Coinbase, Kraken…) or anywhere else | `coin` = CoinGecko id (the slug in `coingecko.com/en/coins/<id>`) |
 
@@ -54,7 +55,7 @@ The live site is **password-protected** (your browser shows a login prompt, whic
 2. Add your wallets and keys. Cloud Shell has an editor (`cloudshell edit wallets.json`):
    ```bash
    cp wallets.example.json wallets.json   # put your public addresses in
-   cp .env.example .env                   # put ALCHEMY_API_KEY (and optionally COINGECKO_API_KEY) in
+   cp .env.example .env                   # optional: ALCHEMY_API_KEY, COINGECKO_API_KEY
    ```
 3. Deploy:
    ```bash

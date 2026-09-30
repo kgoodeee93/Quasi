@@ -24,6 +24,7 @@ class CoinGecko:
             header = "x-cg-pro-api-key" if pro else "x-cg-demo-api-key"
             self.headers[header] = settings.coingecko_api_key
         self._contracts: dict[tuple[str, str], str] | None = None
+        self._by_platform: dict[str, list[str]] = {}
 
     async def _get(self, path: str, params: dict | None = None, retries: int = 3):
         for attempt in range(retries + 1):
@@ -52,15 +53,24 @@ class CoinGecko:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(coins))
         mapping: dict[tuple[str, str], str] = {}
+        by_platform: dict[str, list[str]] = {}
         for coin in coins:
             for platform, address in (coin.get("platforms") or {}).items():
                 if platform and address:
-                    mapping.setdefault((platform, normalize_address(platform, address)), coin["id"])
+                    key = (platform, normalize_address(platform, address))
+                    if key not in mapping:
+                        mapping[key] = coin["id"]
+                        by_platform.setdefault(platform, []).append(key[1])
         self._contracts = mapping
+        self._by_platform = by_platform
 
     def resolve(self, platform: str, contract: str) -> str | None:
         assert self._contracts is not None, "call load_contract_map() first"
         return self._contracts.get((platform, normalize_address(platform, contract)))
+
+    def listed_contracts(self, platform: str) -> list[str]:
+        """Every contract CoinGecko prices on a platform (for chains with no token indexer)."""
+        return self._by_platform.get(platform, [])
 
     async def markets(self, coin_ids: list[str]) -> dict[str, dict]:
         """Price, market cap, volume, % changes, ATH, supply and 7d sparkline per coin."""

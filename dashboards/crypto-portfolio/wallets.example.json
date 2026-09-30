@@ -5,7 +5,21 @@
       "label": "MetaMask",
       "type": "evm",
       "address": "0xYOUR_EVM_ADDRESS",
-      "chains": ["ethereum", "base", "arbitrum", "optimism", "polygon"]
+      "chains": [
+        "ethereum",
+        "base",
+        "arbitrum",
+        "optimism",
+        "polygon",
+        "robinhood",
+        "arc",
+        "hyperevm"
+      ]
+    },
+    {
+      "label": "Hyperliquid",
+      "type": "hyperliquid",
+      "address": "0xYOUR_EVM_ADDRESS"
     },
     {
       "label": "Phantom",
@@ -15,15 +29,25 @@
     {
       "label": "Cold storage",
       "type": "bitcoin",
-      "addresses": ["bc1YOUR_FIRST_ADDRESS", "bc1YOUR_SECOND_ADDRESS"]
+      "addresses": [
+        "bc1YOUR_FIRST_ADDRESS",
+        "bc1YOUR_SECOND_ADDRESS"
+      ]
     },
     {
       "label": "Coinbase",
       "type": "manual",
       "display_chain": "exchange",
       "holdings": [
-        {"coin": "bitcoin", "amount": 0.05},
-        {"coin": "ethereum", "amount": 1.2, "chain": "ethereum"}
+        {
+          "coin": "bitcoin",
+          "amount": 0.05
+        },
+        {
+          "coin": "ethereum",
+          "amount": 1.2,
+          "chain": "ethereum"
+        }
       ]
     }
   ],
