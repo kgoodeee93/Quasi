@@ -51,6 +51,7 @@ class Settings:
     wallets_file: Path = field(default_factory=lambda: ROOT / "wallets.json")
     cache_ttl: int = 60
     cache_dir: Path = field(default_factory=lambda: ROOT / ".cache")
+    dashboard_password: str = ""  # set -> the whole site sits behind HTTP Basic auth
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -67,6 +68,8 @@ class Settings:
             vs_currency=os.getenv("VS_CURRENCY", "usd").lower(),
             wallets_file=wallets_file,
             cache_ttl=int(os.getenv("CACHE_TTL", "60")),
+            cache_dir=Path(os.getenv("CACHE_DIR") or ROOT / ".cache"),
+            dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         )
 
 

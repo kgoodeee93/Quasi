@@ -1,0 +1,10 @@
+# Never ship your wallet list or keys; they come from Secret Manager at runtime.
+wallets.json
+.env
+.cache/
+.venv/
+__pycache__/
+.pytest_cache/
+tests/
+*.md
+deploy.sh

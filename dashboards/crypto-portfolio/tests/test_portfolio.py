@@ -153,3 +153,16 @@ def test_collect_end_to_end_with_mocked_apis(tmp_path):
     assert holdings["bitcoin"]["amount"] == pytest.approx(1.5)
     assert any("1 unlisted/spam" in w for w in d["warnings"])
     assert set(d["views"]) == {"all", "MM", "Phantom", "Cold", "CEX"}
+
+
+def test_password_gate(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    monkeypatch.setattr(main.settings, "dashboard_password", "s3cret")
+    client = TestClient(main.app)
+    assert client.get("/api/health").status_code == 200
+    r = client.get("/")
+    assert r.status_code == 401 and "Basic" in r.headers["www-authenticate"]
+    assert client.get("/", auth=("anyone", "wrong")).status_code == 401
+    assert client.get("/", auth=("anyone", "s3cret")).status_code == 200
