@@ -1,0 +1,7 @@
+# Your real wallet list and keys never get committed.
+wallets.json
+.env
+.cache/
+__pycache__/
+.pytest_cache/
+.venv/

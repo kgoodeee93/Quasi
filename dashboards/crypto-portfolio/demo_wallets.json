@@ -1,0 +1,87 @@
+{
+  "_comment": "Sample portfolio shown when wallets.json doesn't exist. Manual entries only, so it runs with zero API keys.",
+  "wallets": [
+    {
+      "label": "Ledger (cold)",
+      "type": "manual",
+      "display_chain": "bitcoin",
+      "holdings": [
+        {
+          "coin": "bitcoin",
+          "amount": 0.42
+        }
+      ]
+    },
+    {
+      "label": "MetaMask",
+      "type": "manual",
+      "display_chain": "ethereum",
+      "holdings": [
+        {
+          "coin": "ethereum",
+          "amount": 3.1
+        },
+        {
+          "coin": "ethereum",
+          "amount": 0.6,
+          "chain": "base"
+        },
+        {
+          "coin": "chainlink",
+          "amount": 180
+        },
+        {
+          "coin": "uniswap",
+          "amount": 95
+        },
+        {
+          "coin": "usd-coin",
+          "amount": 2500
+        }
+      ]
+    },
+    {
+      "label": "Phantom",
+      "type": "manual",
+      "display_chain": "solana",
+      "holdings": [
+        {
+          "coin": "solana",
+          "amount": 48
+        },
+        {
+          "coin": "jupiter-exchange-solana",
+          "amount": 1200
+        },
+        {
+          "coin": "bonk",
+          "amount": 25000000
+        }
+      ]
+    },
+    {
+      "label": "Coinbase",
+      "type": "manual",
+      "display_chain": "exchange",
+      "holdings": [
+        {
+          "coin": "bitcoin",
+          "amount": 0.08
+        },
+        {
+          "coin": "solana",
+          "amount": 12
+        },
+        {
+          "coin": "tether",
+          "amount": 1500
+        }
+      ]
+    }
+  ],
+  "cost_basis": {
+    "bitcoin": 31000,
+    "ethereum": 9800,
+    "solana": 6100
+  }
+}
