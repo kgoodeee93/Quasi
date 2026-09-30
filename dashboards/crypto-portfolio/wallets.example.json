@@ -1,0 +1,35 @@
+{
+  "_comment": "Copy to wallets.json (git-ignored) and replace with your own addresses. Public addresses only; never put seed phrases or private keys anywhere near this file.",
+  "wallets": [
+    {
+      "label": "MetaMask",
+      "type": "evm",
+      "address": "0xYOUR_EVM_ADDRESS",
+      "chains": ["ethereum", "base", "arbitrum", "optimism", "polygon"]
+    },
+    {
+      "label": "Phantom",
+      "type": "solana",
+      "address": "YOUR_SOLANA_ADDRESS"
+    },
+    {
+      "label": "Cold storage",
+      "type": "bitcoin",
+      "addresses": ["bc1YOUR_FIRST_ADDRESS", "bc1YOUR_SECOND_ADDRESS"]
+    },
+    {
+      "label": "Coinbase",
+      "type": "manual",
+      "display_chain": "exchange",
+      "holdings": [
+        {"coin": "bitcoin", "amount": 0.05},
+        {"coin": "ethereum", "amount": 1.2, "chain": "ethereum"}
+      ]
+    }
+  ],
+  "cost_basis": {
+    "_comment": "Optional. Total amount you paid per coin (all wallets combined), in VS_CURRENCY. Keys are CoinGecko ids.",
+    "bitcoin": 5000,
+    "ethereum": 3200
+  }
+}

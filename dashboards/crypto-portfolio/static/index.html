@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Portfolio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap" id="app">
+  <header>
+    <h1>Crypto Portfolio</h1>
+    <span class="badge" id="demo-badge" hidden>Demo data: add wallets.json</span>
+    <div class="spacer"></div>
+    <span class="meta" id="updated"></span>
+    <button class="btn" id="refresh" title="Re-fetch balances and prices">Refresh</button>
+    <button class="btn" id="theme" title="Toggle light/dark">Theme</button>
+  </header>
+
+  <div class="filters">
+    <select id="view" aria-label="Wallet"></select>
+    <input type="search" id="search" placeholder="Search asset…" aria-label="Search assets">
+    <label><input type="checkbox" id="dust" checked> Hide &lt; $1</label>
+    <label><input type="checkbox" id="auto" checked> Auto-refresh 60s</label>
+  </div>
+
+  <div id="warnings"></div>
+  <div id="content"><div class="empty">Loading portfolio…</div></div>
+  <footer>Prices &amp; market data: CoinGecko. 24h PnL = current value × 24h % / (100 + 24h %), i.e. the change in value of what you hold now. It ignores transfers and trades made during the window.</footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
