@@ -1,0 +1,24 @@
+[project]
+name = "quasi"
+version = "0.1.0"
+description = "Agents and dashboards wired into personal and business accounts"
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=1.11",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "google-api-python-client>=2.130",
+  "google-auth-oauthlib>=1.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+quasi = "quasi.__main__:cli"
+
+[tool.setuptools.packages.find]
+include = ["quasi*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
