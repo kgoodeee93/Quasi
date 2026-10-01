@@ -8,24 +8,40 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# EVM chains we can read. `alchemy` is the Alchemy network slug, `platform` is
-# CoinGecko's asset-platform id (used to map contract -> coin), `native` is the
-# CoinGecko id of the gas token, `public_rpc` is a keyless fallback.
-EVM_CHAINS: dict[str, dict[str, str]] = {
-    "ethereum": {"alchemy": "eth-mainnet", "platform": "ethereum", "native": "ethereum",
-                 "public_rpc": "https://ethereum-rpc.publicnode.com"},
-    "base": {"alchemy": "base-mainnet", "platform": "base", "native": "ethereum",
-             "public_rpc": "https://base-rpc.publicnode.com"},
-    "arbitrum": {"alchemy": "arb-mainnet", "platform": "arbitrum-one", "native": "ethereum",
+# EVM chains we can read.
+#   alchemy:    Alchemy network slug (ERC-20s via ALCHEMY_API_KEY), or None if Alchemy doesn't serve it
+#   blockscout: keyless Blockscout explorer used for ERC-20s when there is no Alchemy key
+#   platform:   CoinGecko asset-platform id (maps contract -> coin, which also filters spam)
+#   native:     CoinGecko id of the gas token
+#   public_rpc: keyless RPC for the native balance
+EVM_CHAINS: dict[str, dict[str, str | None]] = {
+    "ethereum": {"alchemy": "eth-mainnet", "blockscout": "eth.blockscout.com", "platform": "ethereum",
+                 "native": "ethereum", "public_rpc": "https://ethereum-rpc.publicnode.com"},
+    "base": {"alchemy": "base-mainnet", "blockscout": "base.blockscout.com", "platform": "base",
+             "native": "ethereum", "public_rpc": "https://base-rpc.publicnode.com"},
+    "arbitrum": {"alchemy": "arb-mainnet", "blockscout": "arbitrum.blockscout.com",
+                 "platform": "arbitrum-one", "native": "ethereum",
                  "public_rpc": "https://arbitrum-one-rpc.publicnode.com"},
-    "optimism": {"alchemy": "opt-mainnet", "platform": "optimistic-ethereum", "native": "ethereum",
+    "optimism": {"alchemy": "opt-mainnet", "blockscout": "optimism.blockscout.com",
+                 "platform": "optimistic-ethereum", "native": "ethereum",
                  "public_rpc": "https://optimism-rpc.publicnode.com"},
-    "polygon": {"alchemy": "polygon-mainnet", "platform": "polygon-pos",
-                "native": "polygon-ecosystem-token",
+    "polygon": {"alchemy": "polygon-mainnet", "blockscout": "polygon.blockscout.com",
+                "platform": "polygon-pos", "native": "polygon-ecosystem-token",
                 "public_rpc": "https://polygon-bor-rpc.publicnode.com"},
+    # Robinhood Chain (Arbitrum Orbit L2, chain id 4663). Its explorer sits behind a bot
+    # challenge, so only the native ETH balance is read.
+    "robinhood": {"alchemy": None, "blockscout": None, "platform": "robinhood", "native": "ethereum",
+                  "public_rpc": "https://rpc.mainnet.chain.robinhood.com"},
+    # Circle's Arc (chain id 5042): USDC is the native gas token (18 decimals at the protocol level).
+    "arc": {"alchemy": None, "blockscout": None, "platform": "arc", "native": "usd-coin",
+            "public_rpc": "https://rpc.mainnet.arc.io"},
+    # HyperEVM (chain id 999), the EVM side of Hyperliquid. For HyperCore spot/perps
+    # balances use a wallet of type "hyperliquid".
+    "hyperevm": {"alchemy": None, "blockscout": None, "platform": "hyperevm", "native": "hyperliquid",
+                 "public_rpc": "https://rpc.hyperliquid.xyz/evm"},
 }
 
-WALLET_TYPES = {"evm", "solana", "bitcoin", "manual"}
+WALLET_TYPES = {"evm", "solana", "bitcoin", "hyperliquid", "manual"}
 
 
 def load_dotenv(path: Path) -> None:
@@ -51,6 +67,7 @@ class Settings:
     wallets_file: Path = field(default_factory=lambda: ROOT / "wallets.json")
     cache_ttl: int = 60
     cache_dir: Path = field(default_factory=lambda: ROOT / ".cache")
+    dashboard_password: str = ""  # set -> the whole site sits behind HTTP Basic auth
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -67,6 +84,8 @@ class Settings:
             vs_currency=os.getenv("VS_CURRENCY", "usd").lower(),
             wallets_file=wallets_file,
             cache_ttl=int(os.getenv("CACHE_TTL", "60")),
+            cache_dir=Path(os.getenv("CACHE_DIR") or ROOT / ".cache"),
+            dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         )
 
 

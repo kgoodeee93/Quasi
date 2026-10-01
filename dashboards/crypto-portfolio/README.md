@@ -11,7 +11,7 @@ live from CoinGecko.
 ```bash
 cd dashboards/crypto-portfolio
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 # open http://localhost:8000
 ```
@@ -27,8 +27,9 @@ cp .env.example .env                   # git-ignored, add API keys
 
 | Wallet `type` | What it reads | Needs |
 |---|---|---|
-| `evm` | Native coin + every ERC-20 on `ethereum`, `base`, `arbitrum`, `optimism`, `polygon` | `ALCHEMY_API_KEY` for tokens (free tier works). Without it, only ETH/POL. |
+| `evm` | Native coin + ERC-20s on `ethereum`, `base`, `arbitrum`, `optimism`, `polygon`, `robinhood` (Robinhood Chain), `arc` (Circle's Arc, where USDC is the gas coin), `hyperevm` | Nothing. Tokens come from Alchemy if `ALCHEMY_API_KEY` is set, else Blockscout, else a Multicall3 `balanceOf` scan over every token CoinGecko lists on that chain. An Alchemy key makes it faster and more reliable. |
 | `solana` | SOL + SPL + Token-2022 tokens | Nothing (public RPC). Set `SOLANA_RPC_URL` (Helius, QuickNode) if you get rate-limited. |
+| `hyperliquid` | HyperCore spot balances, perp account equity, staked HYPE, vault deposits | Nothing (public info API) |
 | `bitcoin` | Balance of one or more addresses (`addresses: [...]`) | Nothing (mempool.space) |
 | `manual` | Coins held on exchanges (Coinbase, Kraken…) or anywhere else | `coin` = CoinGecko id (the slug in `coingecko.com/en/coins/<id>`) |
 
@@ -40,6 +41,35 @@ phrase or private key.
 
 Tokens CoinGecko doesn't list (airdropped spam, scam tokens) are dropped automatically. The count
 shows up under "data notices".
+
+## Deploy to Google Cloud Run (one command)
+
+The live site is **password-protected** (your browser shows a login prompt, which works on a phone).
+`wallets.json` and your API keys go into **Secret Manager**. They are never baked into the image or committed.
+
+1. Open [Google Cloud Shell](https://shell.cloud.google.com) (gcloud is already logged in) and pick or create a project with billing enabled:
+   ```bash
+   gcloud config set project YOUR_PROJECT_ID
+   git clone https://github.com/kgoodeee93/Quasi.git && cd Quasi/dashboards/crypto-portfolio
+   ```
+2. Add your wallets and keys. Cloud Shell has an editor (`cloudshell edit wallets.json`):
+   ```bash
+   cp wallets.example.json wallets.json   # put your public addresses in
+   cp .env.example .env                   # optional: ALCHEMY_API_KEY, COINGECKO_API_KEY
+   ```
+3. Deploy:
+   ```bash
+   ./deploy.sh                            # or: DASHBOARD_PASSWORD='pick-one' ./deploy.sh
+   ```
+   It prints the URL and, on the first run, a generated password. Log in with any username.
+
+**Updating wallets or keys:** edit the files and run `./deploy.sh` again.
+**Changing the password:** `DASHBOARD_PASSWORD='new' ./deploy.sh`.
+**Reading the password:** `gcloud secrets versions access latest --secret crypto-dashboard-password`.
+
+**Cost:** it scales to zero when nobody is looking (`min-instances 0`, `max-instances 1`), so personal use
+fits inside Cloud Run's free tier. Secret Manager costs about $0.06 per secret per month beyond its
+free allowance. The first page load after it has been idle takes a few seconds (cold start).
 
 ## What's on the dashboard
 
@@ -90,7 +120,9 @@ app/
     bitcoin.py       mempool.space address stats
   portfolio.py       PURE math: positions + prices → every metric (no I/O, fully unit-tested)
   service.py         fetches all wallets in parallel (asyncio.gather), one failure doesn't sink the rest
-  main.py            FastAPI: GET /api/portfolio (?refresh=true), serves static/
+  main.py            FastAPI: GET /api/portfolio (?refresh=true), serves static/, optional password gate
+Dockerfile           production image (non-root, uvicorn on $PORT)
+deploy.sh            Cloud Run + Secret Manager deploy
 static/              index.html + app.js (vanilla JS, hand-rolled SVG charts) + styles.css (light/dark)
 tests/               pytest, all HTTP mocked
 ```
@@ -100,7 +132,7 @@ portfolio.py → one JSON payload** containing a view for "all" plus one per wal
 renders; it does no math. Results are cached for `CACHE_TTL` seconds to keep API usage low. The
 CoinGecko client retries on 429 rate limits.
 
-Run tests: `python -m pytest -q`
+Run tests: `pip install -r requirements-dev.txt && python -m pytest -q`
 
 ## Roadmap ideas
 

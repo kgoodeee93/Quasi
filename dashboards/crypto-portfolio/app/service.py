@@ -12,6 +12,7 @@ from .portfolio import build_dashboard
 from .providers import Position
 from .providers.bitcoin import fetch_bitcoin
 from .providers.evm import fetch_evm
+from .providers.hyperliquid import fetch_hyperliquid
 from .providers.prices import CoinGecko
 from .providers.solana import fetch_solana
 
@@ -26,10 +27,14 @@ def _wallet_jobs(client, settings: Settings, wallet: Wallet, cg: CoinGecko):
         if wallet.type == "evm":
             for chain in wallet.chains:
                 jobs.append((f"{wallet.label} {chain} {short}",
-                             fetch_evm(client, settings, wallet.label, addr, chain, cg.resolve)))
+                             fetch_evm(client, settings, wallet.label, addr, chain, cg.resolve,
+                                       cg.listed_contracts)))
         elif wallet.type == "solana":
             jobs.append((f"{wallet.label} solana {short}",
                          fetch_solana(client, settings, wallet.label, addr, cg.resolve)))
+        elif wallet.type == "hyperliquid":
+            jobs.append((f"{wallet.label} hyperliquid {short}",
+                         fetch_hyperliquid(client, wallet.label, addr, cg.resolve)))
         elif wallet.type == "bitcoin":
             jobs.append((f"{wallet.label} bitcoin {short}",
                          fetch_bitcoin(client, settings, wallet.label, addr)))
@@ -45,7 +50,7 @@ async def collect(config: PortfolioConfig, settings: Settings,
         warnings: list[str] = []
         positions: list[Position] = []
 
-        if any(w.type in ("evm", "solana") for w in config.wallets):
+        if any(w.type in ("evm", "solana", "hyperliquid") for w in config.wallets):
             await cg.load_contract_map()
 
         for w in config.wallets:

@@ -153,3 +153,89 @@ def test_collect_end_to_end_with_mocked_apis(tmp_path):
     assert holdings["bitcoin"]["amount"] == pytest.approx(1.5)
     assert any("1 unlisted/spam" in w for w in d["warnings"])
     assert set(d["views"]) == {"all", "MM", "Phantom", "Cold", "CEX"}
+
+
+def test_password_gate(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    monkeypatch.setattr(main.settings, "dashboard_password", "s3cret")
+    client = TestClient(main.app)
+    assert client.get("/api/health").status_code == 200
+    r = client.get("/")
+    assert r.status_code == 401 and "Basic" in r.headers["www-authenticate"]
+    assert client.get("/", auth=("anyone", "wrong")).status_code == 401
+    assert client.get("/", auth=("anyone", "s3cret")).status_code == 200
+
+
+def _encode_aggregate3_result(words: list[int | None]) -> str:
+    """Build a Multicall3 aggregate3 return value: (bool success, bytes returnData)[]."""
+    tuples = [[1, 64, 32, w] if w is not None else [0, 64, 0] for w in words]
+    offsets, pos = [], len(words) * 32
+    for t in tuples:
+        offsets.append(pos)
+        pos += 32 * len(t)
+    flat = [32, len(words)] + offsets + [x for t in tuples for x in t]
+    return "0x" + "".join(format(x, "064x") for x in flat)
+
+
+def test_multicall_encoding_roundtrip():
+    from app.providers.evm import _decode_aggregate3, _encode_aggregate3
+    targets = ["0x" + "11" * 20, "0x" + "22" * 20]
+    enc = _encode_aggregate3(targets, "70a08231" + "00" * 12 + "ab" * 20)
+    assert enc.startswith("0x82ad56cb")
+    body = bytes.fromhex(enc[10:])
+    assert int.from_bytes(body[32:64], "big") == 2                   # array length
+    assert body[64 + 64 + 12:64 + 64 + 32] == bytes.fromhex("11" * 20)  # first target
+    assert _decode_aggregate3(_encode_aggregate3_result([5, None])) == [5, None]
+
+
+def test_hyperliquid_and_arc_native_dedup(tmp_path):
+    usdc_arc = "0x3600000000000000000000000000000000000000"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        body = json.loads(req.content) if req.content else {}
+        if "coins/list" in url:
+            return httpx.Response(200, json=[
+                {"id": "usd-coin", "platforms": {"hyperliquid": "0xusdc", "arc": usdc_arc}},
+                {"id": "hyperliquid", "platforms": {"hyperliquid": "0xhype"}}])
+        if "coins/markets" in url:
+            return httpx.Response(200, json=[{**market(i, 1.0, 0.0), "id": i}
+                                             for i in req.url.params["ids"].split(",")])
+        if "hyperliquid.xyz" in url:
+            return httpx.Response(200, json={
+                "spotMeta": {"tokens": [{"index": 0, "tokenId": "0xusdc"}, {"index": 150, "tokenId": "0xhype"},
+                                        {"index": 9, "tokenId": "0xunlisted"}]},
+                "spotClearinghouseState": {"balances": [{"token": 0, "total": "10"}, {"token": 150, "total": "2"},
+                                                        {"token": 9, "total": "5"}]},
+                "clearinghouseState": {"marginSummary": {"accountValue": "100"}},
+                "delegatorSummary": {"delegated": "3", "undelegated": "1", "totalPendingWithdrawal": "0"},
+                "userVaultEquities": [{"equity": "7"}],
+            }[body["type"]])
+        if "arc.io" in url:
+            if body["method"] == "eth_getBalance":
+                return httpx.Response(200, json={"result": hex(50 * 10**18)})  # 50 native USDC
+            # multicall: USDC ERC-20 mirrors the same 50 USDC (6 decimals); must not double count
+            calldata = body["params"][0]["data"]
+            word = 50 * 10**6 if calldata[10 + 64 * 5 + 2:10 + 64 * 5 + 10] == "70a08231" else 6
+            return httpx.Response(200, json={"result": _encode_aggregate3_result([word])})
+        return httpx.Response(404)
+
+    settings = Settings(wallets_file=tmp_path / "none.json", cache_dir=tmp_path)
+    cfg = parse_config({"wallets": [
+        {"label": "HL", "type": "hyperliquid", "address": "0xabc"},
+        {"label": "Arc", "type": "evm", "address": "0x" + "ab" * 20, "chains": ["arc"]},
+    ]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await collect(cfg, settings, client)
+
+    d = asyncio.run(run())
+    rows = {r["id"]: r for r in d["views"]["all"]["holdings"]}
+    assert rows["usd-coin"]["amount"] == pytest.approx(10 + 100 + 7 + 50)  # spot + perps + vault + Arc native
+    assert rows["hyperliquid"]["amount"] == pytest.approx(2 + 4)             # spot + staked
+    chains = {w["chain"] for w in rows["usd-coin"]["wallets"]}
+    assert chains == {"hyperliquid spot", "hyperliquid perps", "hyperliquid vaults", "arc"}
+    assert any("1 spot token" in w for w in d["warnings"])
