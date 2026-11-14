@@ -40,6 +40,9 @@ from playwright.sync_api import Error as PWError
 from playwright.sync_api import sync_playwright
 
 SHOTS = Path(os.environ.get("SHOTS", "/tmp/crypto-shots"))
+# The container's preinstalled browser build changes between images and rarely matches the
+# Playwright release pip just installed; this symlink always points at the image's Chromium.
+FALLBACK_CHROMIUM = os.environ.get("CHROMIUM_PATH", "/opt/pw-browsers/chromium")
 READY = "#chart svg"  # the hero chart only renders after /api/portfolio succeeded
 
 
@@ -54,7 +57,13 @@ def main() -> int:
 
     errors: list[str] = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        try:
+            browser = p.chromium.launch()
+        except PWError as e:
+            if "Executable doesn't exist" not in str(e) or not Path(FALLBACK_CHROMIUM).exists():
+                raise
+            print(f"note: Playwright's own browser build is missing; using {FALLBACK_CHROMIUM}", file=sys.stderr)
+            browser = p.chromium.launch(executable_path=FALLBACK_CHROMIUM)
         ctx = browser.new_context(
             viewport={"width": args.width, "height": args.height},
             http_credentials={"username": "agent", "password": args.password} if args.password else None,
