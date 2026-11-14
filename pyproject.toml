@@ -20,5 +20,8 @@ quasi = "quasi.__main__:cli"
 [tool.setuptools.packages.find]
 include = ["quasi*"]
 
+[tool.setuptools.package-data]
+quasi = ["static/*"]   # the browser dashboard, served by quasi.api
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

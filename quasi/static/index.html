@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quasi — Operations Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%233B82F6'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='17' font-weight='700' text-anchor='middle' fill='white'%3EQ%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <strong>Quasi</strong>
+            <small>Ops cockpit</small>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <a class="active" href="#">Overview</a>
+          <a href="#">Calendar</a>
+          <a href="#">Inbox</a>
+          <a href="#">Money</a>
+          <a href="#">Approvals</a>
+        </nav>
+
+        <div class="sidebar-panel">
+          <p class="eyebrow">Status</p>
+          <div id="connection-pill" class="connection-pill disconnected">Demo mode</div>
+          <p id="connection-note" class="meta">Connect your Google account to load live data.</p>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Today</p>
+            <h1 id="today-title">Operations dashboard</h1>
+          </div>
+          <button class="primary" id="connect-btn">Connect Google</button>
+        </header>
+
+        <section class="hero-grid" id="kpi-grid"></section>
+
+        <section class="content-grid">
+          <div class="panel large-panel">
+            <div class="panel-header">
+              <h2>Today at a glance</h2>
+            </div>
+            <p id="summary-text" class="summary"></p>
+            <div id="event-list" class="event-list"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Priority focus</h2>
+            </div>
+            <ul id="focus-list" class="checklist"></ul>
+          </div>
+        </section>
+
+        <section class="content-grid lower-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Quick actions</h2>
+            </div>
+            <div class="quick-actions">
+              <button data-question="What is on my calendar today?">Calendar</button>
+              <button data-question="When am I free tomorrow afternoon?">Free time</button>
+              <button data-question="Book a 30 minute focus session tomorrow at 10am">Book time</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Approvals</h2>
+            </div>
+            <div id="approval-list" class="approval-list"></div>
+          </div>
+        </section>
+
+        <section class="panel ask-panel">
+          <div class="panel-header">
+            <h2>Ask Quasi</h2>
+          </div>
+          <form id="ask-form" class="ask-form">
+            <input id="question-input" type="text" placeholder="Ask about your calendar, inbox, or next actions..." />
+            <button type="submit" class="primary">Ask</button>
+          </form>
+          <div id="answer-box" class="answer-box">Ask a question to get a useful answer from your personal operations layer.</div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
