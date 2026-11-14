@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from .agents import Agent, build_agent
+from .agents.approvals import deny_all
+from .demo_data import build_demo_overview
+from .integrations.google_auth import GoogleAuthError
+
+ROOT = Path(__file__).resolve().parent
+app = FastAPI(title="Quasi", version="0.1.0")
+
+
+class AskRequest(BaseModel):
+    question: str
+
+
+class AskResponse(BaseModel):
+    answer: str
+    stop_reason: str
+    tool_calls: list[dict[str, Any]]
+
+
+@lru_cache(maxsize=1)
+def agent() -> Agent:
+    return build_agent(approver=deny_all, interactive_auth=False)
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> HTMLResponse:
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(content=html)
+
+
+app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
+
+
+@app.get("/health")
+def health() -> dict[str, bool]:
+    return {"ok": True}
+
+
+@app.get("/api/overview")
+def overview() -> dict[str, Any]:
+    from .config import Settings
+
+    settings = Settings.load()
+    if settings.google_token.exists():
+        try:
+            from .integrations.gcal import GoogleCalendar
+
+            cal = GoogleCalendar(settings, interactive=False)
+            today_label = datetime.now(cal.tz).strftime("%Y-%m-%d")
+            data = cal.list_events(today_label)
+            events = [{
+                "title": e["title"],
+                "time": e["start"],
+                "location": e.get("location") or "No location",
+                "type": "calendar",
+            } for e in data.get("events", [])[:4]]
+            return {
+                "connected": True,
+                "summary": "Your schedule is connected and ready.",
+                "events": events,
+                "focus": [
+                    "Review email triage",
+                    "Finish project follow-up",
+                    "Protect your next focus block",
+                ],
+                "kpis": [
+                    {"label": "Today", "value": f"{len(events)} events", "tone": "blue"},
+                    {"label": "Free time", "value": "2 hrs", "tone": "green"},
+                    {"label": "Approvals", "value": "3 pending", "tone": "amber"},
+                ],
+            }
+        except Exception:
+            pass
+
+    return build_demo_overview()
+
+
+@app.post("/api/ask", response_model=AskResponse)
+def ask_api(req: AskRequest):
+    try:
+        res = agent().ask(req.question)
+    except GoogleAuthError as e:
+        raise HTTPException(503, str(e))
+    return AskResponse(answer=res.text, stop_reason=res.stop_reason, tool_calls=res.tool_calls)
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask(req: AskRequest):
+    return ask_api(req)
