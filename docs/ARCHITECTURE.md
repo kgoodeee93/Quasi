@@ -86,6 +86,10 @@ A system of agents and dashboards wired into Kevin's personal and business accou
 ### Status
 
 - [x] **Phase 0 agent**: `quasi ask "what's on my calendar today?"` against Google Calendar (see `quasi/README.md`)
+- [x] **Phase 1**: Gmail integration (search, read, approval-gated drafts; no send tool) and the
+      Briefing agent (`quasi brief --email`, `POST /brief`): code gathers the day, one Claude call writes it
+- [ ] Phase 1: Google Drive integration
+- [ ] Router across specialist agents (one general agent covers Calendar + Gmail today)
 - [x] Integration plugin interface, approval gate, audit log
 - [x] FastAPI `/health` + `/ask`
 - [ ] Supabase project + token storage (tokens are a local `0600` file until then)

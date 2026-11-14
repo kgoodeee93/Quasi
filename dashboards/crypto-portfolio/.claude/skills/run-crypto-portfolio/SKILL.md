@@ -13,12 +13,12 @@ All paths below are relative to `dashboards/crypto-portfolio/`.
 ## Prerequisites
 
 Python 3.11+, outbound HTTPS to `api.coingecko.com` (every page load prices live), and Chromium.
-This container ships Chromium build 1194 under `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`, which
-matches Playwright **1.56.0**, so pin it:
+Install with `python3 -m pip` (in this image plain `pip` belongs to a different Python). Any
+Playwright version works: if its own browser build isn't in `/opt/pw-browsers`, the driver
+falls back to the image's Chromium at `/opt/pw-browsers/chromium` (override with `CHROMIUM_PATH`).
 
 ```bash
-pip install -q -r requirements-dev.txt
-pip install -q "playwright==1.56.0"
+python3 -m pip install -q -r requirements-dev.txt playwright
 ```
 
 ## Run (agent path)
@@ -126,18 +126,24 @@ from Google Cloud Shell (see `README.md`); it needs gcloud auth, which this cont
 
 ## Gotchas
 
-- **Latest Playwright can't find the browser.** `pip install playwright` (1.63) wants
-  `/opt/pw-browsers/chromium_headless_shell-1243/...`; the container has 1194 → pin `1.56.0`.
-  Don't run `playwright install` here.
+- **Playwright and the preinstalled browser drift apart.** Each Playwright release wants one
+  Chromium build (1.56 → 1194, 1.65 → 1255) and the container image ships whichever build it was
+  made with (seen: 1194, later 1243), so a pinned version breaks on the next image. The driver
+  catches `Executable doesn't exist` and relaunches with `executable_path=/opt/pw-browsers/chromium`
+  (prints `note: Playwright's own browser build is missing; using …` on stderr). Don't run `playwright install`.
+- **`pip install` may target the wrong Python.** Here `pip` is Python 3.13's and `python3` is 3.11:
+  packages "install" and then `ModuleNotFoundError`. Use `python3 -m pip`.
+- **Full Chrome requests `/favicon.ico`; the headless shell didn't.** Without a favicon every load
+  logged `console: Failed to load resource: … 404`; `static/index.html` now inlines an SVG icon.
 - **`pkill -f "uvicorn app.main:app"` kills your own shell** (exit 144) because the pattern matches
   the command line that runs it. Stop servers with `lsof -ti:<port> -sTCP:LISTEN | xargs -r kill`.
 - **A local `wallets.json` silently switches off demo mode.** It's git-ignored, so it may exist on
   a dev box with someone's real addresses. Use `WALLETS_FILE=/nonexistent` for reproducible demo data.
 - **Numbers move between runs.** Prices are live; assert on structure (`.hero-label`, row counts,
   `overflow`), not on dollar values.
-- **Coin logos fail in this sandbox** (`ERR_CERT_AUTHORITY_INVALID` from `coin-images.coingecko.com`
-  through the agent proxy). The UI falls back to gradient monograms; the driver's `errors` filters
-  these. Logos load fine outside the sandbox.
+- **Coin logos can fail behind the sandbox proxy.** One container image rejected
+  `coin-images.coingecko.com` with `ERR_CERT_AUTHORITY_INVALID` (a later image loaded them fine).
+  The UI falls back to gradient monograms and the driver's `errors` filters `ERR_CERT` lines.
 - **CoinGecko 429s without a key.** The client retries with backoff (5 s, 10 s, 20 s); a cold
   start with many tokens can take tens of seconds. Set `COINGECKO_API_KEY` in `.env` if it matters.
 - **Real EVM/Solana wallets download a ~4 MB coin list** on first run (cached in `.cache/` for 24 h).
@@ -151,8 +157,9 @@ from Google Cloud Shell (see `README.md`); it needs gcloud auth, which this cont
 
 ## Troubleshooting
 
-- **`BrowserType.launch: Executable doesn't exist at /opt/pw-browsers/chromium_headless_shell-1243/…`**:
-  wrong Playwright version → `pip install "playwright==1.56.0"`.
+- **`BrowserType.launch: Executable doesn't exist at /opt/pw-browsers/chromium_headless_shell-<build>/…`**
+  from your own Playwright script (the driver handles it): launch with
+  `executable_path="/opt/pw-browsers/chromium"`.
 - **`ERR click: Page.click: Timeout 10000ms exceeded.`**: selector didn't match. Wallet tabs are
   `#wallet-nav button[data-view="<label>"]`, sort headers `button[data-sort="<field>"]`, rows
   `tr.row` with the symbol in `.sym`.

@@ -1,8 +1,12 @@
 """Google OAuth for a personal account (installed-app flow).
 
 First run opens a browser to grant access; the refresh token is cached in a
-0600 file and reused after that. Scopes are requested per integration and kept
-minimal (see each integration's SCOPES).
+0600 file and reused after that.
+
+All Google integrations share ONE token, so it is requested with the union of
+their scopes: asking for one integration's scopes alone would replace the token
+and silently disconnect the others. Adding a scope here means every user runs
+`python -m quasi connect google` once more.
 """
 from __future__ import annotations
 
@@ -11,6 +15,14 @@ from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+
+
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",    # read + create events
+    "https://www.googleapis.com/auth/calendar.readonly",  # timezone setting, free/busy
+    "https://www.googleapis.com/auth/gmail.readonly",     # search + read mail
+    "https://www.googleapis.com/auth/gmail.compose",      # drafts + the self-addressed brief
+]
 
 
 class GoogleAuthError(RuntimeError):
@@ -31,7 +43,8 @@ def get_credentials(scopes: list[str], client_secret: Path, token_path: Path,
         creds.refresh(Request())
     else:
         if not interactive:
-            raise GoogleAuthError("Google isn't connected yet. Run `python -m quasi connect google` once.")
+            raise GoogleAuthError("Google isn't connected (or needs the newly added permissions). "
+                                  "Run `python -m quasi connect google` once.")
         if not client_secret.exists():
             raise GoogleAuthError(
                 f"OAuth client file not found at {client_secret}. "

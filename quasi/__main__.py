@@ -1,8 +1,9 @@
 """Command line.
 
-  python -m quasi connect google          one-time Google sign-in
+  python -m quasi connect google          one-time Google sign-in (Calendar + Gmail)
   python -m quasi ask "what's on my calendar today?"
   python -m quasi chat                    multi-turn conversation
+  python -m quasi brief [--email]         morning brief; --email sends it to your own inbox
 """
 from __future__ import annotations
 
@@ -23,9 +24,17 @@ def main(argv: list[str]) -> int:
     try:
         if cmd == "connect" and rest[:1] == ["google"]:
             from .integrations.gcal import GoogleCalendar
+            from .integrations.gmail import Gmail
             cal = GoogleCalendar(settings)
             cal.connect()
-            print(f"Google Calendar connected (timezone {cal.tz}). Token saved to {settings.google_token}.")
+            print(f"Google connected as {Gmail(settings).me} (calendar timezone {cal.tz}). "
+                  f"Token saved to {settings.google_token}.")
+            return 0
+        if cmd == "brief":
+            from .agents import run_brief
+            brief, path, sent = run_brief(settings, email="--email" in rest)
+            print(brief.text)
+            print(f"\n(saved to {path}{'; emailed to ' + sent['to'] if sent else ''})")
             return 0
         agent = build_agent(settings, approver=cli_approver)
         if cmd == "ask" and rest:
@@ -33,7 +42,7 @@ def main(argv: list[str]) -> int:
             return 0
         if cmd == "chat":
             history = None
-            print("Quasi. Ask about your calendar; empty line to quit.")
+            print("Quasi. Ask about your calendar or email; empty line to quit.")
             while (q := input("\nyou › ").strip()):
                 res = agent.ask(q, history)
                 history = res.messages

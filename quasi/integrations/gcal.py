@@ -6,13 +6,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .base import Tool, schema
-from .google_auth import get_credentials
+from .google_auth import GOOGLE_SCOPES, get_credentials
 
-# events = read + create on your calendars; calendar.readonly covers the timezone setting and free/busy.
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/calendar.readonly",
-]
+SCOPES = GOOGLE_SCOPES  # shared token: see google_auth
 
 
 class GoogleCalendar:
