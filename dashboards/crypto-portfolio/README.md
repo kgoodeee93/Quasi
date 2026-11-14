@@ -47,21 +47,29 @@ shows up under "data notices".
 The live site is **password-protected** (your browser shows a login prompt, which works on a phone).
 `wallets.json` and your API keys go into **Secret Manager**. They are never baked into the image or committed.
 
-1. Open [Google Cloud Shell](https://shell.cloud.google.com) (gcloud is already logged in) and pick or create a project with billing enabled:
+Before you start: a Google Cloud project with **billing enabled** (Cloud Run needs it even inside
+the free tier). Create one at [console.cloud.google.com/projectcreate](https://console.cloud.google.com/projectcreate).
+
+1. **Open the repo in Cloud Shell** (it's already signed in to your Google account; when asked,
+   choose *Trust* so your files survive between sessions):
+
+   [![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2Fkgoodeee93%2FQuasi&cloudshell_workspace=dashboards%2Fcrypto-portfolio)
+
+   Or by hand: open [shell.cloud.google.com](https://shell.cloud.google.com) and run
+   `git clone https://github.com/kgoodeee93/Quasi.git && cd Quasi/dashboards/crypto-portfolio`.
+2. **Point it at your project and add your wallets** (Cloud Shell has an editor):
    ```bash
    gcloud config set project YOUR_PROJECT_ID
-   git clone https://github.com/kgoodeee93/Quasi.git && cd Quasi/dashboards/crypto-portfolio
-   ```
-2. Add your wallets and keys. Cloud Shell has an editor (`cloudshell edit wallets.json`):
-   ```bash
-   cp wallets.example.json wallets.json   # put your public addresses in
+   cp wallets.example.json wallets.json && cloudshell edit wallets.json   # your public addresses
    cp .env.example .env                   # optional: ALCHEMY_API_KEY, COINGECKO_API_KEY
    ```
-3. Deploy:
+3. **Deploy:**
    ```bash
    ./deploy.sh                            # or: DASHBOARD_PASSWORD='pick-one' ./deploy.sh
    ```
-   It prints the URL and, on the first run, a generated password. Log in with any username.
+   The first run takes about 3–5 minutes (it builds the container). If it asks to create an
+   Artifact Registry repository, answer **Y**. It prints the URL and, on the first run, a
+   generated password. Log in with any username.
 
 **Updating wallets or keys:** edit the files and run `./deploy.sh` again.
 **Changing the password:** `DASHBOARD_PASSWORD='new' ./deploy.sh`.
