@@ -68,6 +68,9 @@ class Settings:
     cache_ttl: int = 60
     cache_dir: Path = field(default_factory=lambda: ROOT / ".cache")
     dashboard_password: str = ""  # set -> the whole site sits behind HTTP Basic auth
+    moby_api_key: str = ""        # set -> smart-money panel (Moby whale / KOL flow, Solana only)
+    moby_url: str = "https://mcp.moby.win/mcp"
+    moby_cache_ttl: int = 120     # Moby refreshes its rollups about every 2 minutes
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -86,6 +89,9 @@ class Settings:
             cache_ttl=int(os.getenv("CACHE_TTL", "60")),
             cache_dir=Path(os.getenv("CACHE_DIR") or ROOT / ".cache"),
             dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
+            moby_api_key=os.getenv("MOBY_API_KEY", ""),
+            moby_url=os.getenv("MOBY_MCP_URL") or cls.moby_url,
+            moby_cache_ttl=int(os.getenv("MOBY_CACHE_TTL", "120")),
         )
 
 
@@ -95,7 +101,7 @@ class Wallet:
     type: str
     addresses: list[str] = field(default_factory=list)
     chains: list[str] = field(default_factory=list)  # evm only
-    holdings: list[dict] = field(default_factory=list)  # manual only: {"coin", "amount", "chain"?}
+    holdings: list[dict] = field(default_factory=list)  # manual only: {"coin", "amount", "chain"?, "contract"?}
     display_chain: str = ""  # manual only: what to show in the "chain" column
 
 
@@ -141,7 +147,7 @@ def parse_config(raw: dict) -> PortfolioConfig:
                 if "coin" not in h or "amount" not in h:
                     raise ConfigError(f"{label}: manual holdings need 'coin' (CoinGecko id) and 'amount'")
                 holdings.append({"coin": str(h["coin"]).lower(), "amount": float(h["amount"]),
-                                 "chain": h.get("chain", "")})
+                                 "chain": h.get("chain", ""), "contract": str(h.get("contract", ""))})
 
         wallets.append(Wallet(label=label, type=wtype, addresses=addresses, chains=chains,
                               holdings=holdings, display_chain=w.get("display_chain", "")))

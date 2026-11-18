@@ -14,3 +14,4 @@ class Position:
     chain: str
     coin_id: str
     amount: float
+    contract: str = ""  # token address on `chain` when known (Solana mints feed the smart-money panel)

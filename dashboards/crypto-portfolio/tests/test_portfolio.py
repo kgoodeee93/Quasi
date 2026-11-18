@@ -153,6 +153,9 @@ def test_collect_end_to_end_with_mocked_apis(tmp_path):
     assert holdings["bitcoin"]["amount"] == pytest.approx(1.5)
     assert any("1 unlisted/spam" in w for w in d["warnings"])
     assert set(d["views"]) == {"all", "MM", "Phantom", "Cold", "CEX"}
+    # Solana mints ride along for the smart-money panel (SOL as wrapped SOL; EVM USDC has no mint)
+    assert d["solana_tokens"] == {"solana": "So11111111111111111111111111111111111111112",
+                                  "usd-coin": usdc_sol}
 
 
 def test_password_gate(monkeypatch):

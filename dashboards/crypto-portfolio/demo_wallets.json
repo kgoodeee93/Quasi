@@ -47,15 +47,18 @@
       "holdings": [
         {
           "coin": "solana",
-          "amount": 48
+          "amount": 48,
+          "contract": "So11111111111111111111111111111111111111112"
         },
         {
           "coin": "jupiter-exchange-solana",
-          "amount": 1200
+          "amount": 1200,
+          "contract": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"
         },
         {
           "coin": "bonk",
-          "amount": 25000000
+          "amount": 25000000,
+          "contract": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
         }
       ]
     },

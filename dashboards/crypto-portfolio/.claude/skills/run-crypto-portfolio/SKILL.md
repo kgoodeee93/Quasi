@@ -92,6 +92,25 @@ EOF
 lsof -ti:8000 -sTCP:LISTEN | xargs -r kill; lsof -ti:8001 -sTCP:LISTEN | xargs -r kill
 ```
 
+**Smart-money panel (Moby).** Off unless `MOBY_API_KEY` is set. In a cloud session the key is a
+network secret the proxy injects into requests to `mcp.moby.win`, so pass a placeholder; demo mode
+then shows JUP and BONK (they carry mints in `demo_wallets.json`) plus the live market pulse:
+
+```bash
+WALLETS_FILE=/nonexistent MOBY_API_KEY=proxy-injected nohup python3 -m uvicorn app.main:app --port 8000 > /tmp/crypto-dashboard.log 2>&1 &
+python3 .claude/skills/run-crypto-portfolio/driver.py <<'EOF'
+wait .smart
+eval [...document.querySelectorAll('.sm-row .sym')].map(e => e.textContent)
+click button[data-smwin="h1"]
+ss-el .smart smart-1h
+quit
+EOF
+```
+
+`/api/smart-money` returns `{"enabled": false}` without a key and `{"enabled": true, "error": ...}`
+when Moby fails (the panel shows the message; the rest of the page is unaffected). Moby data is
+live, so assert on structure (`.sm-row` count, `.sm-top li`), not on dollar amounts.
+
 ## Direct invocation (no server, no browser)
 
 Most backend PRs touch `app/providers/*` or `app/portfolio.py`. Call the pipeline directly:
@@ -116,7 +135,7 @@ and filtered spam tokens.
 ## Test
 
 ```bash
-python3 -m pytest -q        # -> 10 passed, all HTTP mocked
+python3 -m pytest -q        # -> 16 passed, all HTTP mocked (Moby too)
 ```
 
 ## Run (human path)

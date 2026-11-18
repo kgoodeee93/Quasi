@@ -21,9 +21,11 @@ die() { echo "error: $*" >&2; exit 1; }
 [ -f wallets.json ] || die "wallets.json not found. Copy wallets.example.json to wallets.json and add your addresses."
 python3 -c "import json,sys; json.load(open('wallets.json'))" || die "wallets.json is not valid JSON"
 
-env_value() {  # read KEY from .env without sourcing it
+env_value() {  # read KEY from .env without sourcing it; prints nothing if absent
   [ -f .env ] || return 0
-  grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'
+  # `|| true`: grep exits 1 when the key is missing, which pipefail + set -e would turn
+  # into a silent exit of the whole script.
+  { grep -E "^$1=" .env || true; } | tail -1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'
 }
 
 echo "==> Project $PROJECT, region $REGION, service $SERVICE"
@@ -32,6 +34,12 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
 
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+# Source deploys build with the default compute service account; on projects created since
+# 2024 it lacks build permissions and the first build fails. Grant Cloud Run Builder (idempotent).
+gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$RUNTIME_SA" \
+  --role roles/run.builder --condition=None --quiet >/dev/null \
+  || echo "warning: couldn't grant roles/run.builder to $RUNTIME_SA; if the build fails with PERMISSION_DENIED, grant it in IAM"
 
 secret_exists() { gcloud secrets describe "$1" --project "$PROJECT" >/dev/null 2>&1; }
 
@@ -59,7 +67,7 @@ elif ! secret_exists crypto-dashboard-password; then
 fi
 SECRETS="$SECRETS,DASHBOARD_PASSWORD=crypto-dashboard-password:latest"
 
-for key in ALCHEMY_API_KEY COINGECKO_API_KEY; do
+for key in ALCHEMY_API_KEY COINGECKO_API_KEY MOBY_API_KEY; do
   value="${!key:-$(env_value "$key")}"
   name="crypto-$(echo "$key" | tr 'A-Z_' 'a-z-')"
   if [ -n "$value" ]; then
