@@ -6,6 +6,8 @@ import httpx
 from ..config import Settings
 from . import Position, Resolver
 
+WSOL_MINT = "So11111111111111111111111111111111111111112"  # how SOL appears in token data
+
 TOKEN_PROGRAMS = (
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",  # SPL Token
     "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",  # Token-2022
@@ -30,7 +32,7 @@ async def fetch_solana(client: httpx.AsyncClient, settings: Settings, wallet_lab
 
     lamports = (await _rpc(client, url, "getBalance", [address]))["value"]
     if lamports:
-        positions.append(Position(wallet_label, "solana", "solana", lamports / 1e9))
+        positions.append(Position(wallet_label, "solana", "solana", lamports / 1e9, WSOL_MINT))
 
     amounts: dict[str, float] = {}
     for program in TOKEN_PROGRAMS:
@@ -46,7 +48,7 @@ async def fetch_solana(client: httpx.AsyncClient, settings: Settings, wallet_lab
     for mint, amount in amounts.items():
         coin = resolve("solana", mint)
         if coin:
-            positions.append(Position(wallet_label, "solana", coin, amount))
+            positions.append(Position(wallet_label, "solana", coin, amount, mint))
         else:
             skipped += 1
     if skipped:

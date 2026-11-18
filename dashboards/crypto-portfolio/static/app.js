@@ -11,6 +11,8 @@ const state = {
   hideDust: true,
   auto: true,
   open: new Set(),
+  sm: null,       // /api/smart-money payload (Moby); null = panel off
+  smWin: "h24",
 };
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -91,6 +93,7 @@ async function load(refresh = false) {
     if (!body.views[state.view]) state.view = "all";
     renderChrome();
     render();
+    loadSmart(refresh);
   } catch (e) {
     if (!state.data) $("#content").innerHTML = `<div class="card empty"><b>Couldn't load your portfolio.</b><br>${esc(e.message)}</div>`;
     else $("#updated").textContent = `Refresh failed · ${e.message}`;
@@ -135,6 +138,7 @@ function render() {
       ${pnlCard(rows, s)}
       ${riskCard(s)}
     </div>
+    <div id="sm-slot">${smartCard()}</div>
     ${holdingsCard(v, rows)}
   </div>`;
   drawChart(v.history);
@@ -285,6 +289,99 @@ function riskCard(s) {
       ${fact("Weighted market cap", money(s.weighted_market_cap, { compact: true }), "excl. stablecoins")}
       ${fact("From 7d high", pct(s.drawdown_7d), `High ${money(s.high_7d, { cents: false })}`, tone(s.drawdown_7d))}
     </div>
+  </section>`;
+}
+
+/* ---------- smart money: Moby whale / KOL flow (Solana only; read-only, no trading) ---------- */
+async function loadSmart(refresh = false) {
+  try {
+    const r = await fetch(`/api/smart-money${refresh ? "?refresh=true" : ""}`);
+    if (!r.ok) throw new Error(r.statusText);
+    state.sm = await r.json();
+  } catch {
+    if (!state.sm?.enabled) state.sm = null;  // keep the last good panel if a refresh fails
+  }
+  const slot = $("#sm-slot");
+  if (slot) slot.innerHTML = smartCard();
+}
+
+// Moby reports flows in USD whatever the dashboard currency is.
+function fmoney(v, signed = true) {
+  if (v == null || !isFinite(v)) return "–";
+  const a = Math.abs(v);
+  const s = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: a >= 1000 ? "compact" : "standard", maximumFractionDigits: a >= 1000 ? 1 : 0 }).format(a);
+  return (signed && a >= 0.5 ? sign(v) : "") + s;
+}
+function ago(iso) {
+  if (!iso) return "";
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+}
+const SAFETY = { green: ["Verified", "up"], grey: ["Unscored", "flat"], red: ["Caution", "down"] };
+const WINS = [["h1", "1h"], ["h4", "4h"], ["h24", "24h"]];
+const solscan = (mint, text) => `<a class="sym" href="https://solscan.io/token/${encodeURIComponent(mint)}" target="_blank" rel="noopener noreferrer">${esc(text)}</a>`;
+
+function smRow(h, r, w) {
+  const f = h.flow?.[w];
+  const buy = f?.buy_volume_usd ?? 0, sell = f?.sell_volume_usd ?? 0, total = buy + sell;
+  const [safe, safeTone] = SAFETY[h.safety_tier] ?? [];
+  const n = f?.wallets_in ?? 0;
+  const activity = !f ? "Flow unavailable" : total
+    ? `${n} wallet${n === 1 ? "" : "s"} in · ${f.buy_count ?? 0} buys / ${f.sell_count ?? 0} sells${f.last_buy_at ? ` · last buy ${ago(f.last_buy_at)}` : ""}`
+    : "No tracked trades";
+  return `<li class="sm-row">
+    ${coin(r, 34)}
+    <div class="sm-main">
+      <div class="sym-line">${solscan(h.mint, h.symbol)}${safe ? `<span class="chain sm-${safeTone}" title="${esc(h.safety_note || "")}">${safe}</span>` : ""}</div>
+      <div class="sm-read" title="${esc(h.read?.text || "")}">${esc(h.read?.text || "No smart-money read from Moby")}</div>
+    </div>
+    <div class="sm-right">
+      <span class="pill ${f ? tone(f.net_flow_usd) : "flat"}">${f ? tri(f.net_flow_usd) + fmoney(f.net_flow_usd) : "n/a"}</span>
+      <div class="sm-act">${activity}</div>
+      <div class="sm-bar" role="img" aria-label="Buys ${fmoney(buy, false)}, sells ${fmoney(sell, false)}"><i style="width:${total ? ((buy / total) * 100).toFixed(1) : 0}%"></i></div>
+    </div>
+  </li>`;
+}
+
+function smartCard() {
+  const sm = state.sm;
+  if (!sm?.enabled || !state.data) return "";
+  const w = state.smWin;
+  const head = `<div class="card-head sm-head"><div><h2 id="sm-h">Smart money</h2>
+      <div class="sm-sub">Whale &amp; KOL flow on Solana · via Moby${sm.as_of ? ` · ${ago(sm.as_of)}` : ""}</div></div>
+    <div class="seg" role="group" aria-label="Flow window">${WINS.map(([k, l]) => `<button data-smwin="${k}" aria-pressed="${w === k}">${l}</button>`).join("")}</div></div>`;
+  if (sm.error) return `<section class="card smart" aria-labelledby="sm-h">${head}<div class="empty">Moby is unavailable right now: ${esc(sm.error)}</div></section>`;
+
+  const inView = new Map(state.data.views[state.view].holdings.map((r) => [r.id, r]));
+  const mine = sm.holdings.filter((h) => inView.has(h.coin_id));
+  const skip = sm.skipped.filter((sym) => [...inView.values()].some((r) => r.symbol === sym));
+  const one = skip.length === 1;
+  const skipped = skip.length ? `<p class="sm-note">${esc(skip.join(", "))} ${one ? "isn't" : "aren't"} tracked: Solana trades settle in ${one ? "it" : "them"}, so Moby sees no flow into ${one ? "it" : "them"}.</p>` : "";
+  const list = mine.length
+    ? `<ul class="sm-list">${mine.map((h) => smRow(h, inView.get(h.coin_id), w)).join("")}</ul>`
+    : `<div class="empty sm-empty">${state.view === "all" ? "None of your holdings are Solana tokens Moby tracks." : "No Solana tokens Moby tracks in this wallet."}<br>Moby covers Solana only.</div>`;
+
+  const p = sm.pulse[w];
+  const stat = (label, x) => `<div class="sm-stat"><div class="k">${label}</div><div class="v num ${tone(x.net_flow_usd)}">${fmoney(x.net_flow_usd)}</div>
+    <div class="s">${(x.buyers ?? 0).toLocaleString()} buying · ${(x.sellers ?? 0).toLocaleString()} selling</div></div>`;
+  const top = (rows) => rows.length ? rows.map((t) => `<li>${solscan(t.mint, t.symbol)}${t.held ? `<span class="badge held">You hold</span>` : ""}
+      <span class="num ${tone(t.net_flow_usd)}">${fmoney(t.net_flow_usd)}</span>
+      <span class="sm-act" title="${t.buyers ?? 0} buyers, ${t.sellers ?? 0} sellers">${t.buyers ?? 0}/${t.sellers ?? 0}</span></li>`).join("")
+    : `<li class="sm-act">Nothing yet</li>`;
+
+  return `<section class="card smart" aria-labelledby="sm-h">${head}
+    <div class="sm-grid">
+      <div><div class="label-sm">Your tokens · net flow ${WINS.find(([k]) => k === w)[1]}</div>${list}${skipped}</div>
+      <div class="sm-market">
+        <div class="label-sm">Whole market · net flow ${WINS.find(([k]) => k === w)[1]}</div>
+        <div class="sm-stats">${stat("Whales", p.whale)}${stat("KOLs", p.kol)}</div>
+        <div class="sm-tops">
+          <div><div class="label-sm">Most bought</div><ol class="sm-top">${top(p.top_net_buy)}</ol></div>
+          <div><div class="label-sm">Most sold</div><ol class="sm-top">${top(p.top_net_sell)}</ol></div>
+        </div>
+      </div>
+    </div>
+    <p class="sm-foot">Counts swaps of $${sm.min_trade_usd ?? 100}+ by wallets Moby tracks; 12/5 = buying/selling wallets. Information, not advice.</p>
   </section>`;
 }
 
@@ -493,6 +590,12 @@ document.addEventListener("click", (e) => {
     state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: k === "symbol" ? 1 : -1 };
     return render();
   }
+  if (t.dataset.smwin) {
+    state.smWin = t.dataset.smwin;
+    store.set("smWin", state.smWin);
+    $("#sm-slot").innerHTML = smartCard();
+    return;
+  }
   if (t.id === "dust") { state.hideDust = !state.hideDust; return render(); }
   if (t.id === "auto") { state.auto = !state.auto; store.set("auto", state.auto ? "1" : "0"); t.setAttribute("aria-pressed", state.auto); return; }
   if (t.id === "csv") return exportCsv();
@@ -505,6 +608,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#palette-menu")?.remove(); });
 $("#search").addEventListener("input", (e) => { state.search = e.target.value; if (state.data) render(); });
 state.auto = store.get("auto") !== "0";
+if (WINS.some(([k]) => k === store.get("smWin"))) state.smWin = store.get("smWin");
 setInterval(() => state.auto && !document.hidden && load(), 60_000);
 let resizeT;
 window.addEventListener("resize", () => {

@@ -56,7 +56,7 @@ async def collect(config: PortfolioConfig, settings: Settings,
         for w in config.wallets:
             if w.type == "manual":
                 positions += [Position(w.label, h["chain"] or w.display_chain or "manual",
-                                       h["coin"], h["amount"])
+                                       h["coin"], h["amount"], h["contract"])
                               for h in w.holdings]
 
         jobs = [job for w in config.wallets for job in _wallet_jobs(client, settings, w, cg)]
@@ -79,6 +79,8 @@ async def collect(config: PortfolioConfig, settings: Settings,
             "demo": config.demo,
             "warnings": warnings,
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            # coin id -> Solana mint, for the smart-money panel (Moby is keyed by mint)
+            "solana_tokens": {p.coin_id: p.contract for p in positions if p.chain == "solana" and p.contract},
         })
         return data
     finally:

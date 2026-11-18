@@ -67,7 +67,7 @@ elif ! secret_exists crypto-dashboard-password; then
 fi
 SECRETS="$SECRETS,DASHBOARD_PASSWORD=crypto-dashboard-password:latest"
 
-for key in ALCHEMY_API_KEY COINGECKO_API_KEY; do
+for key in ALCHEMY_API_KEY COINGECKO_API_KEY MOBY_API_KEY; do
   value="${!key:-$(env_value "$key")}"
   name="crypto-$(echo "$key" | tr 'A-Z_' 'a-z-')"
   if [ -n "$value" ]; then

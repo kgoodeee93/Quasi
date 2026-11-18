@@ -1,4 +1,4 @@
-"""FastAPI app: JSON API at /api/portfolio, dashboard at /.
+"""FastAPI app: JSON API at /api/portfolio and /api/smart-money, dashboard at /.
 
 Run:  uvicorn app.main:app --reload     (from dashboards/crypto-portfolio)
 """
@@ -13,10 +13,13 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from .config import ROOT, ConfigError, Settings, load_config
+from .providers.moby import MobyError
 from .service import PortfolioCache, collect
+from .smart_money import collect_smart_money
 
 settings = Settings.from_env()
 cache = PortfolioCache(settings.cache_ttl)
+smart_cache = PortfolioCache(settings.moby_cache_ttl)
 app = FastAPI(title="Crypto Portfolio Dashboard")
 
 
@@ -53,6 +56,18 @@ async def portfolio(refresh: bool = False):
         code = e.response.status_code
         hint = " (rate limited; add COINGECKO_API_KEY or raise CACHE_TTL)" if code == 429 else ""
         raise HTTPException(502, f"Upstream error {code} from {e.request.url.host}{hint}")
+
+
+@app.get("/api/smart-money")
+async def smart_money(refresh: bool = False):
+    """Moby whale / KOL flow for your Solana tokens and the market. Off unless MOBY_API_KEY is set."""
+    if not settings.moby_api_key:
+        return {"enabled": False}
+    data = await portfolio()  # the cached portfolio; refreshing it is /api/portfolio's job
+    try:
+        return await smart_cache.get(lambda: collect_smart_money(data, settings), force=refresh)
+    except (MobyError, httpx.HTTPError) as e:
+        return {"enabled": True, "error": str(e) or type(e).__name__}
 
 
 @app.get("/api/health")
