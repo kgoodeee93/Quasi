@@ -1,0 +1,13 @@
+{
+  "vol_5m_min": 15000,
+  "txns_5m_min": 50,
+  "buys_5m_min": 30,
+  "buyers_5m_min": 25,
+  "buy_sell_ratio_min": 1.5,
+  "top10_max_pct": 25,
+  "dev_max_pct": 5,
+  "sniper_max_pct": 15,
+  "bundled_max_pct": 5,
+  "mint_disabled": true,
+  "freeze_disabled": true
+}
