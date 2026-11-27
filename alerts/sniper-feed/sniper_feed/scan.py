@@ -39,6 +39,21 @@ def merge_safety(moby: dict, rug: dict | None) -> dict:
     return out
 
 
+def hard_blocks(m: dict) -> list[dict]:
+    """Never alerted whatever the rules say; recorded as checks so misses show why."""
+    return [
+        {"rule": "not_red_tier", "label": "Moby safety tier not red", "limit": True,
+         "value": m.get("safety_tier"), "ok": m.get("safety_tier") != "red"},
+        {"rule": "not_rugged", "label": "RugCheck: not rugged", "limit": True,
+         "value": bool(m.get("rugged")), "ok": not m.get("rugged")},
+        {"rule": "not_tokenized_stock", "label": "Not a tokenized stock", "limit": True,
+         "value": m.get("asset_class"), "ok": m.get("asset_class") != "tokenized_stock"},
+        # Dozens of buys and not one sell in 5 minutes can mean nobody is able to sell: a honeypot.
+        {"rule": "has_sells_5m", "label": "Sells in last 5m (honeypot guard)", "limit": True,
+         "value": m.get("sells_5m"), "ok": (m.get("sells_5m") or 0) > 0},
+    ]
+
+
 async def run_scan(client: httpx.AsyncClient, rules: Rules, moby: sources.Moby | None,
                    skip=lambda mint: False) -> ScanResult:
     res = ScanResult()
@@ -83,10 +98,9 @@ async def run_scan(client: httpx.AsyncClient, rules: Rules, moby: sources.Moby |
                                               None if isinstance(risk, Exception) else risk),
                          None if isinstance(rug, Exception) else rug)
         metrics = {**p, **m}
-        checks = evaluate(metrics, rules)
-        blocked = m.get("safety_tier") == "red" or m.get("rugged") or m.get("asset_class") == "tokenized_stock"
+        checks = evaluate(metrics, rules) + hard_blocks(metrics)
         entry = {"token": p, "metrics": metrics, "checks": checks}
-        if passed(checks) and not blocked:
+        if passed(checks):
             res.alerts.append(entry)
         else:
             res.near_misses.append(entry)

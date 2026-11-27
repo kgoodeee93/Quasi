@@ -7,12 +7,16 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 
 import httpx
 
 GECKO = "https://api.geckoterminal.com/api/v2"
+# Same endpoints on a paid CoinGecko plan (commercial licence, higher limits): set COINGECKO_API_KEY.
+GECKO_PRO = "https://pro-api.coingecko.com/api/v3/onchain"
 RUGCHECK = "https://api.rugcheck.xyz/v1"
 MOBY_URL = "https://mcp.moby.win/mcp"
 
@@ -37,6 +41,22 @@ def _f(v) -> float | None:
 
 
 # --- GeckoTerminal -------------------------------------------------------------------------------
+
+async def gecko_get(client: httpx.AsyncClient, path: str, params: dict | None = None,
+                    retries: int = 2, backoff: float = 10) -> dict:
+    """GET a GeckoTerminal path; on a 429 wait and retry (10s, then 20s) before giving up."""
+    key = os.environ.get("COINGECKO_API_KEY", "")
+    base, headers = (GECKO_PRO, {"x-cg-pro-api-key": key}) if key else (GECKO, {})
+    headers["accept"] = "application/json"
+    for attempt in range(retries + 1):
+        r = await client.get(base + path, params=params, headers=headers)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r.json()
+        if attempt < retries:
+            await asyncio.sleep(backoff * 2 ** attempt)
+    raise SourceError("GeckoTerminal rate limit (30 calls/min on the free tier) still hit after retries")
+
 
 def parse_pool(row: dict) -> dict | None:
     a = row.get("attributes") or {}
@@ -72,11 +92,7 @@ async def gecko_candidates(client: httpx.AsyncClient, trending_pages: int = 2) -
     paths.append("/networks/solana/new_pools?page=1")
     best: dict[str, dict] = {}
     for path in paths:
-        r = await client.get(GECKO + path, headers={"accept": "application/json"})
-        if r.status_code == 429:
-            raise SourceError("GeckoTerminal rate limit (30 calls/min) hit; scan less often")
-        r.raise_for_status()
-        for row in r.json().get("data", []):
+        for row in (await gecko_get(client, path)).get("data", []):
             p = parse_pool(row)
             if p and (p["mint"] not in best or (p["liquidity"] or 0) > (best[p["mint"]]["liquidity"] or 0)):
                 best[p["mint"]] = p
@@ -87,11 +103,22 @@ async def gecko_prices(client: httpx.AsyncClient, mints: list[str]) -> dict[str,
     out: dict[str, float] = {}
     for i in range(0, len(mints), 30):
         chunk = ",".join(mints[i:i + 30])
-        r = await client.get(f"{GECKO}/simple/networks/solana/token_price/{chunk}")
-        r.raise_for_status()
-        prices = ((r.json().get("data") or {}).get("attributes") or {}).get("token_prices") or {}
+        body = await gecko_get(client, f"/simple/networks/solana/token_price/{chunk}")
+        prices = ((body.get("data") or {}).get("attributes") or {}).get("token_prices") or {}
         out.update({m: p for m, v in prices.items() if (p := _f(v)) is not None})
     return out
+
+
+async def gecko_candles(client: httpx.AsyncClient, pool: str, start_ts: float, window: float) -> list[list[float]]:
+    """5-minute USD candles [ts, open, high, low, close, volume] for one pool, covering the window."""
+    if not MINT.match(pool or ""):
+        raise SourceError(f"bad pool address {pool!r}")
+    end = int(start_ts + window)
+    body = await gecko_get(client, f"/networks/solana/pools/{pool}/ohlcv/minute",
+                           {"aggregate": 5, "before_timestamp": end + 300,
+                            "limit": int(window // 300) + 2, "currency": "usd"})
+    rows = ((body.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+    return [[float(x) for x in c[:6]] for c in rows if isinstance(c, list) and len(c) >= 6]
 
 
 # --- RugCheck ------------------------------------------------------------------------------------

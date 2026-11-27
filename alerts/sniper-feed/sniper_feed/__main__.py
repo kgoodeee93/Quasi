@@ -1,9 +1,10 @@
-"""python -m sniper_feed {scan,run,track,stats}
+"""python -m sniper_feed {scan,run,track,stats,backup}
 
-  scan   one scan; prints what passed and the near misses. --send posts alerts to Telegram.
-  run    scan + track forever (--every seconds). Posts only with --send.
-  track  record prices for alerts whose 15m / 1h / 4h / 24h mark has come.
-  stats  the track record so far.
+  scan    one scan; prints alerts and near misses. --send posts alerts to Telegram.
+  run     scan + track forever (--every seconds). Posts only with --send.
+  track   record 15m / 1h / 4h / 24h prices and take-profit / stop-loss replays that are due.
+  stats   the track record: alerts, near misses, and misses grouped by the one rule they failed.
+  backup  copy the database to the path given with --to, safely while `run` is writing.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -20,10 +22,11 @@ from . import sources
 from .notify import format_alert, send_telegram
 from .rules import Rules
 from .scan import run_scan
-from .store import Store
+from .store import EXIT_WINDOW, Store, replay_exit
 
 HERE = Path(__file__).resolve().parent.parent
 UA = {"user-agent": "sniper-feed/1.0"}
+MISS_COOLDOWN_HOURS = 6   # record a token's near miss at most this often
 
 
 def log(*a) -> None:
@@ -33,80 +36,98 @@ def log(*a) -> None:
 def summary(entry: dict) -> str:
     fails = [f"{c['label']} {c['value'] if c['value'] is not None else 'no data'} (limit {c['limit']})"
              for c in entry["checks"] if not c["ok"]]
-    m = entry["metrics"]
-    if m.get("safety_tier") == "red":
-        fails.append("Moby safety tier red")
-    if m.get("rugged"):
-        fails.append("RugCheck: rugged")
-    if m.get("asset_class") == "tokenized_stock":
-        fails.append("tokenized stock (excluded)")
     return f"{entry['token']['symbol']:<12} " + ("; ".join(fails) or "PASS")
 
 
 async def scan_once(args, rules: Rules, store: Store, client: httpx.AsyncClient) -> None:
     key = os.environ.get("MOBY_API_KEY", "")
     moby = sources.Moby(client, key, os.environ.get("MOBY_MCP_URL", sources.MOBY_URL)) if key else None
-    res = await run_scan(client, rules, moby, skip=lambda mint: store.recently_alerted(mint, args.cooldown_hours))
+    res = await run_scan(client, rules, moby,
+                         skip=lambda mint: store.recent(mint, args.cooldown_hours, kind="alert"))
     log(f"scan: {res.candidates} candidates, {res.active} passed 5m activity, {len(res.alerts)} alert(s)")
     for w in res.warnings:
         log("  warning:", w)
     for e in res.near_misses:
         log("  miss ", summary(e))
+        if not store.recent(e["token"]["mint"], MISS_COOLDOWN_HOURS):
+            store.add_signal("miss", e["token"], e["checks"])
     tg_token, tg_chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
+    if res.alerts and args.send and not (tg_token and tg_chat):
+        raise SystemExit("--send needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
     for e in res.alerts:
-        alert_id = store.add_alert(e["token"], e["checks"])
+        signal_id = store.add_signal("alert", e["token"], e["checks"])
         text = format_alert(e["token"], e["metrics"])
         log("  ALERT", summary(e))
         if args.send:
-            if not (tg_token and tg_chat):
-                raise SystemExit("--send needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
             await send_telegram(client, tg_token, tg_chat, text)
-            store.mark_sent(alert_id)
+            store.mark_sent(signal_id)
         else:
             print(text + "\n", flush=True)
 
 
-async def track(store: Store, client: httpx.AsyncClient) -> int:
+async def track(args, store: Store, client: httpx.AsyncClient) -> tuple[int, int]:
+    """(spot outcomes recorded, exit replays recorded)."""
+    n_spot = 0
     due = store.due()
-    if not due:
-        return 0
-    prices = await sources.gecko_prices(client, sorted({mint for _, mint, _, _ in due}))
-    n = 0
-    for alert_id, mint, horizon, entry in due:
-        if mint in prices:
-            store.add_outcome(alert_id, horizon, entry, prices[mint])
-            n += 1
-    return n
+    if due:
+        prices = await sources.gecko_prices(client, sorted({mint for _, mint, _, _ in due}))
+        for signal_id, mint, horizon, entry in due:
+            if mint in prices:
+                store.add_outcome(signal_id, horizon, entry, prices[mint])
+                n_spot += 1
+    n_exit = 0
+    for row in store.exits_due(limit=args.exit_batch):
+        start = datetime.fromisoformat(row["at"]).timestamp()
+        try:
+            candles = await sources.gecko_candles(client, row["pool"], start, EXIT_WINDOW)
+        except (sources.SourceError, httpx.HTTPError) as e:
+            log(f"  exit replay for signal {row['id']} failed: {e}")
+            continue
+        r = replay_exit(candles, start, row["price"], args.tp, args.sl)
+        if r:
+            store.add_exit(row["id"], args.tp, args.sl, r)
+            n_exit += 1
+    return n_spot, n_exit
 
 
 async def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="sniper_feed", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["scan", "run", "track", "stats"])
+    p.add_argument("command", choices=["scan", "run", "track", "stats", "backup"])
     p.add_argument("--rules", default=str(HERE / "rules.json"))
     p.add_argument("--db", default=os.environ.get("FEED_DB", "feed.db"))
     p.add_argument("--send", action="store_true", help="post alerts to Telegram")
     p.add_argument("--every", type=int, default=60, help="seconds between scans for `run` (min 30)")
     p.add_argument("--cooldown-hours", type=float, default=24, help="don't re-alert a token within this")
+    p.add_argument("--tp", type=float, default=50, help="take-profit %% for exit replays")
+    p.add_argument("--sl", type=float, default=25, help="stop-loss %% for exit replays")
+    p.add_argument("--exit-batch", type=int, default=5, help="exit replays per track pass (1 API call each)")
+    p.add_argument("--to", help="destination file for `backup`")
     args = p.parse_args(argv)
 
     rules, store = Rules.load(args.rules), Store(args.db)
     if args.command == "stats":
         print(json.dumps(store.stats(), indent=2))
         return
+    if args.command == "backup":
+        if not args.to:
+            raise SystemExit("backup needs --to PATH")
+        store.backup(args.to)
+        log(f"backup: wrote {args.to}")
+        return
     async with httpx.AsyncClient(headers=UA, timeout=20) as client:
         if args.command == "scan":
             await scan_once(args, rules, store, client)
         elif args.command == "track":
-            log(f"track: recorded {await track(store, client)} outcome(s)")
+            log("track: recorded %d price(s), %d exit replay(s)" % await track(args, store, client))
         else:
             every = max(args.every, 30)  # GeckoTerminal allows 30 calls/min; a scan uses 3
             while True:
                 try:
                     await scan_once(args, rules, store, client)
-                    n = await track(store, client)
-                    if n:
-                        log(f"track: recorded {n} outcome(s)")
+                    spot, ex = await track(args, store, client)
+                    if spot or ex:
+                        log(f"track: recorded {spot} price(s), {ex} exit replay(s)")
                 except (sources.SourceError, httpx.HTTPError, RuntimeError) as e:
                     log("run error:", e)
                 await asyncio.sleep(every)

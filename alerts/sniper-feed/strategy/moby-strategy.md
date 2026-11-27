@@ -40,7 +40,8 @@ report what passes. Real money is involved.
 | 10 | Mint authority | disabled | Moby `get_token_risk_signals` → `mint_authority_renounced` true |
 | 11 | Freeze authority | disabled | Moby `get_token_risk_signals` → `freeze_authority_renounced` true |
 
-Also skip: Moby safety tier red, tokenized stocks, anything RugCheck marks rugged.
+Also skip: Moby safety tier red, tokenized stocks, anything RugCheck marks rugged, and any token
+with buys but zero sells in the last 5 minutes (nobody being able to sell can mean a honeypot).
 
 ## Each run
 1. Candidates: `scan_tokens` (pass the last run's `next_since` as `since`) plus `get_market_movers`

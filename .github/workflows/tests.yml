@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: quasi core
+            dir: .
+            install: pip install -e ".[dev]"
+          - name: crypto dashboard
+            dir: dashboards/crypto-portfolio
+            install: pip install -r requirements-dev.txt
+          - name: sniper feed
+            dir: alerts/sniper-feed
+            install: pip install -r requirements-dev.txt
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: ${{ matrix.install }}
+      - run: python -m pytest -q
+      - name: deploy scripts parse
+        if: matrix.name == 'sniper feed'
+        run: bash -n deploy/deploy-vm.sh && bash -n deploy/vm-startup.sh

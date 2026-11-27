@@ -9,7 +9,7 @@ from sniper_feed import sources
 from sniper_feed.notify import format_alert
 from sniper_feed.rules import ACTIVITY, Rules, evaluate, passed
 from sniper_feed.scan import run_scan
-from sniper_feed.store import Store, now
+from sniper_feed.store import Store, now, replay_exit
 
 GOOD = "38M2z4UCfZEkUHFzD48vhKQhFhNyRGto8pZbLjNipump"
 LINKED = "Ai66LHZG9MCzg1WKdawwqduVAXpNDUuV8M3uyq5ppump"
@@ -167,18 +167,129 @@ def test_alert_text_escapes_token_names():
 def test_store_cooldown_outcome_window_and_stats(tmp_path):
     s = Store(str(tmp_path / "f.db"))
     t0 = now() - timedelta(minutes=20)
-    a = s.add_alert({"mint": GOOD, "symbol": "JIMMY", "price": 0.002}, [], at=t0)
-    assert s.recently_alerted(GOOD, 24) and not s.recently_alerted(LINKED, 24)
+    a = s.add_signal("alert", {"mint": GOOD, "symbol": "JIMMY", "price": 0.002}, [], at=t0)
+    assert s.recent(GOOD, 24, kind="alert") and not s.recent(GOOD, 24, kind="miss") and not s.recent(LINKED, 24)
     assert s.due() == [(a, GOOD, "15m", 0.002)]
     s.add_outcome(a, "15m", 0.002, 0.001)
     assert s.due() == []
     # 3 hours later the 1h mark is too stale to record; the 4h mark isn't due yet
     assert s.due(at=t0 + timedelta(hours=3)) == []
     st = s.stats()
-    assert st["alerts"] == 1 and st["horizons"]["15m"] == {
+    assert st["alerts"]["count"] == 1 and st["misses"]["count"] == 0
+    assert st["alerts"]["horizons"]["15m"] == {
         "n": 1, "median_pct": -50.0, "mean_pct": -50.0, "win_rate_pct": 0.0, "best_pct": -50.0, "worst_pct": -50.0}
+
+
+def c(ts, o, h, l, cl):
+    return [ts, o, h, l, cl, 1.0]
+
+
+def test_replay_exit_first_touch_and_conservative_ties():
+    t = 1_000_000
+    # a candle before the signal reaching +100% is ignored; then TP at +50% on the 2nd candle
+    tp = replay_exit([c(t - 300, 1, 2, 1, 1), c(t, 1, 1.2, 0.9, 1.1), c(t + 300, 1.1, 1.6, 1.0, 1.5)], t, 1.0, 50, 25)
+    assert (tp["result"], tp["minutes_to_exit"], tp["max_up_pct"], tp["candles"]) == ("tp", 5.0, 60.0, 2)
+    # one candle touching both levels counts as the stop
+    both = replay_exit([c(t, 1, 1.7, 0.7, 1.0)], t, 1.0, 50, 25)
+    assert both["result"] == "sl" and both["minutes_to_exit"] == 0
+    # neither touched: open, with the window's close return; candles past the window ignored
+    op = replay_exit([c(t, 1, 1.1, 0.9, 1.05), c(t + 86400, 1, 9, 0.1, 9)], t, 1.0, 50, 25)
+    assert (op["result"], op["close_return_pct"], op["max_down_pct"]) == ("open", 5.0, -10.0)
+    assert replay_exit([], t, 1.0, 50, 25) is None
+
+
+def test_near_misses_tracked_and_grouped_by_the_rule_they_failed(tmp_path):
+    s = Store(str(tmp_path / "f.db"))
+    res = scan(Fake())
+    miss = res.near_misses[0]
+    assert [ch["rule"] for ch in miss["checks"] if not ch["ok"]] == ["bundled_max_pct"]
+    t0 = now() - timedelta(hours=30)
+    a = s.add_signal("alert", res.alerts[0]["token"], res.alerts[0]["checks"], at=t0)
+    m = s.add_signal("miss", miss["token"], miss["checks"], at=t0)
+    s.add_outcome(a, "1h", 0.002, 0.001)
+    s.add_outcome(m, "1h", 0.002, 0.004)
+    assert [r["id"] for r in s.exits_due()] == [a, m]  # alerts replayed first
+    s.add_exit(a, 50, 25, {"result": "sl", "minutes_to_exit": 10, "close_return_pct": None,
+                           "max_up_pct": 5, "max_down_pct": -40, "candles": 288})
+    s.add_exit(m, 50, 25, {"result": "tp", "minutes_to_exit": 30, "close_return_pct": None,
+                           "max_up_pct": 80, "max_down_pct": -5, "candles": 288})
+    assert s.exits_due() == []
+    st = s.stats()
+    assert st["alerts"]["exits"]["avg_trade_pct"] == -25 and st["misses"]["exits"]["hit_tp_pct"] == 100
+    only = st["only_failed"]["bundled_max_pct"]
+    assert only["count"] == 1 and only["1h"]["median_pct"] == 100.0 and only["exits"]["avg_trade_pct"] == 50
+    s.backup(str(tmp_path / "copy.db"))
+    assert Store(str(tmp_path / "copy.db")).stats() == st
+
+
+def test_hard_blocks_turn_a_full_pass_into_a_miss():
+    from sniper_feed.scan import hard_blocks
+    fails = [b["rule"] for b in hard_blocks({"safety_tier": "red", "rugged": True, "asset_class": "tokenized_stock",
+                                             "sells_5m": 0}) if not b["ok"]]
+    assert fails == ["not_red_tier", "not_rugged", "not_tokenized_stock", "has_sells_5m"]
+    assert all(b["ok"] for b in hard_blocks({"safety_tier": "grey", "sells_5m": 3}))
+
+
+def test_all_buys_no_sells_is_held_back_as_a_possible_honeypot():
+    fake = Fake()
+    saved = GECKO_TRENDING["data"][0]
+    GECKO_TRENDING["data"][0] = pool(GOOD, "JIMMY / SOL", 202, 0, 40, 20036.8)
+    try:
+        res = scan(fake)
+    finally:
+        GECKO_TRENDING["data"][0] = saved
+    assert res.alerts == []
+    jimmy = next(m for m in res.near_misses if m["token"]["mint"] == GOOD)
+    assert [c["rule"] for c in jimmy["checks"] if not c["ok"]] == ["has_sells_5m"]
+
+
+def test_gecko_candles_parses_and_rejects_bad_pools():
+    body = {"data": {"attributes": {"ohlcv_list": [[1700000300, "1", "2", "0.5", "1.5", "10"], ["junk"]]}}}
+    seen = []
+
+    def handler(req):
+        seen.append(req.url)
+        return httpx.Response(200, json=body)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as cl:
+            rows = await sources.gecko_candles(cl, "FnHWfV49ywCtGCDTyf34AVN8BiXxcgXUKqLctkrkP1gQ", 1700000000, 86400)
+            with pytest.raises(sources.SourceError):
+                await sources.gecko_candles(cl, "../../etc", 0, 300)
+            return rows
+    assert asyncio.run(go()) == [[1700000300.0, 1.0, 2.0, 0.5, 1.5, 10.0]]
+    assert seen[0].params["aggregate"] == "5" and seen[0].params["limit"] == "290" and len(seen) == 1
 
 
 def test_activity_rules_alone():
     p = sources.parse_pool(GECKO_TRENDING["data"][3])
     assert not passed(evaluate(p, Rules(), ACTIVITY))
+
+
+def test_gecko_retries_429_and_uses_the_paid_api_when_keyed(monkeypatch):
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        return httpx.Response(429) if len(calls) == 1 else httpx.Response(200, json={"ok": 1})
+
+    async def go(**kw):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as cl:
+            return await sources.gecko_get(cl, "/networks/solana/new_pools?page=1", backoff=0, **kw)
+    monkeypatch.delenv("COINGECKO_API_KEY", raising=False)
+    assert asyncio.run(go()) == {"ok": 1} and len(calls) == 2
+    assert str(calls[0].url).startswith("https://api.geckoterminal.com/api/v2/")
+    monkeypatch.setenv("COINGECKO_API_KEY", "cg-key")
+    calls.clear()
+    calls.append(None)  # skip the 429 this time
+    asyncio.run(go())
+    assert str(calls[1].url).startswith("https://pro-api.coingecko.com/api/v3/onchain/networks/solana/new_pools")
+    assert calls[1].headers["x-cg-pro-api-key"] == "cg-key"
+    calls.clear()
+    handler_429 = lambda req: httpx.Response(429)
+
+    async def always_429():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler_429)) as cl:
+            await sources.gecko_get(cl, "/x", retries=1, backoff=0)
+    with pytest.raises(sources.SourceError, match="rate limit"):
+        asyncio.run(always_429())
