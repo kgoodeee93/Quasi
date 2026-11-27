@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from .config import ROOT, ConfigError, Settings, load_config
+from .config import ROOT, ConfigError, Settings, load_config, on_vercel
 from .providers.moby import MobyError
 from .service import PortfolioCache, collect
 from .smart_money import collect_smart_money
@@ -28,9 +28,15 @@ async def require_password(request: Request, call_next):
     """HTTP Basic auth over the whole site when DASHBOARD_PASSWORD is set (any username).
 
     Your browser shows its own login prompt and remembers it, which works on a phone too.
-    /api/health stays open for uptime checks.
+    /api/health stays open for uptime checks. On Vercel the site is public by default, so it
+    refuses to serve anything else until DASHBOARD_PASSWORD is set: wallet addresses stay private.
     """
-    if not settings.dashboard_password or request.url.path == "/api/health":
+    if request.url.path == "/api/health":
+        return await call_next(request)
+    if not settings.dashboard_password:
+        if on_vercel():
+            return Response("Set DASHBOARD_PASSWORD in the Vercel project's environment variables, "
+                            "then redeploy.", status_code=503)
         return await call_next(request)
     header = request.headers.get("authorization", "")
     if header.lower().startswith("basic "):
@@ -49,7 +55,7 @@ async def portfolio(refresh: bool = False):
     try:
         config = load_config(settings)  # re-read each time so edits to wallets.json apply live
     except (ConfigError, ValueError) as e:
-        raise HTTPException(400, f"wallets.json: {e}")
+        raise HTTPException(400, f"wallets: {e}")
     try:
         return await cache.get(lambda: collect(config, settings), force=refresh)
     except httpx.HTTPStatusError as e:

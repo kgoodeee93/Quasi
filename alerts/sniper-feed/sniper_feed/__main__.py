@@ -1,9 +1,10 @@
-"""python -m sniper_feed {scan,run,track,stats,backup}
+"""python -m sniper_feed {scan,run,track,stats,publish,backup}
 
   scan    one scan; prints alerts and near misses. --send posts alerts to Telegram.
   run     scan + track forever (--every seconds). Posts only with --send.
-  track   record 15m / 1h / 4h / 24h prices and take-profit / stop-loss replays that are due.
+  track   record 15m / 1h / 4h / 24h prices and the exit replays (tp_sl and ladder) that are due.
   stats   the track record: alerts, near misses, and misses grouped by the one rule they failed.
+  publish write the public track record (alerts only, details delayed) to the path given with --to.
   backup  copy the database to the path given with --to, safely while `run` is writing.
 """
 from __future__ import annotations
@@ -13,6 +14,7 @@ import asyncio
 import json
 import os
 import sys
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +24,7 @@ from . import sources
 from .notify import format_alert, send_telegram
 from .rules import Rules
 from .scan import run_scan
-from .store import EXIT_WINDOW, Store, replay_exit
+from .store import DEFAULT_LADDER, EXIT_WINDOW, Store, replay_exit, replay_ladder
 
 HERE = Path(__file__).resolve().parent.parent
 UA = {"user-agent": "sniper-feed/1.0"}
@@ -34,8 +36,13 @@ def log(*a) -> None:
 
 
 def summary(entry: dict) -> str:
-    fails = [f"{c['label']} {c['value'] if c['value'] is not None else 'no data'} (limit {c['limit']})"
-             for c in entry["checks"] if not c["ok"]]
+    fails = []
+    for c in entry["checks"]:
+        if c["ok"]:
+            continue
+        value = c["value"] if c["value"] is not None else "no data"
+        fails.append(f"{c['label']}: {value}" if isinstance(c["limit"], bool)
+                     else f"{c['label']} {value} (limit {c['limit']})")
     return f"{entry['token']['symbol']:<12} " + ("; ".join(fails) or "PASS")
 
 
@@ -43,7 +50,8 @@ async def scan_once(args, rules: Rules, store: Store, client: httpx.AsyncClient)
     key = os.environ.get("MOBY_API_KEY", "")
     moby = sources.Moby(client, key, os.environ.get("MOBY_MCP_URL", sources.MOBY_URL)) if key else None
     res = await run_scan(client, rules, moby,
-                         skip=lambda mint: store.recent(mint, args.cooldown_hours, kind="alert"))
+                         skip=lambda mint: store.recent(mint, args.cooldown_hours, kind="alert"),
+                         st_key=os.environ.get("SOLANA_TRACKER_API_KEY", "").strip())
     log(f"scan: {res.candidates} candidates, {res.active} passed 5m activity, {len(res.alerts)} alert(s)")
     for w in res.warnings:
         log("  warning:", w)
@@ -63,6 +71,17 @@ async def scan_once(args, rules: Rules, store: Store, client: httpx.AsyncClient)
             store.mark_sent(signal_id)
         else:
             print(text + "\n", flush=True)
+
+
+def load_ladder(path: str) -> dict:
+    p = Path(path)
+    if not p.exists():
+        return DEFAULT_LADDER
+    data = json.loads(p.read_text())
+    missing = set(DEFAULT_LADDER) - set(data)
+    if missing:
+        raise SystemExit(f"{path} is missing {', '.join(sorted(missing))}")
+    return data
 
 
 async def track(args, store: Store, client: httpx.AsyncClient) -> tuple[int, int]:
@@ -85,7 +104,9 @@ async def track(args, store: Store, client: httpx.AsyncClient) -> tuple[int, int
             continue
         r = replay_exit(candles, start, row["price"], args.tp, args.sl)
         if r:
-            store.add_exit(row["id"], args.tp, args.sl, r)
+            store.add_exit(row["id"], "tp_sl", r, {"tp_pct": args.tp, "sl_pct": args.sl})
+            lad = replay_ladder(candles, start, row["price"], args.ladder_cfg)
+            store.add_exit(row["id"], "ladder", lad, {"fills": lad["fills"], "tps_hit": lad["tps_hit"]})
             n_exit += 1
     return n_spot, n_exit
 
@@ -93,7 +114,7 @@ async def track(args, store: Store, client: httpx.AsyncClient) -> tuple[int, int
 async def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="sniper_feed", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["scan", "run", "track", "stats", "backup"])
+    p.add_argument("command", choices=["scan", "run", "track", "stats", "publish", "backup"])
     p.add_argument("--rules", default=str(HERE / "rules.json"))
     p.add_argument("--db", default=os.environ.get("FEED_DB", "feed.db"))
     p.add_argument("--send", action="store_true", help="post alerts to Telegram")
@@ -102,12 +123,27 @@ async def main(argv=None) -> None:
     p.add_argument("--tp", type=float, default=50, help="take-profit %% for exit replays")
     p.add_argument("--sl", type=float, default=25, help="stop-loss %% for exit replays")
     p.add_argument("--exit-batch", type=int, default=5, help="exit replays per track pass (1 API call each)")
-    p.add_argument("--to", help="destination file for `backup`")
+    p.add_argument("--ladder", default=str(HERE / "ladder.json"), help="the bot's exit ladder, for replays")
+    p.add_argument("--delay-hours", type=float, default=24, help="`publish`: hide alerts newer than this")
+    p.add_argument("--to", help="destination file for `backup` and `publish`")
     args = p.parse_args(argv)
 
     rules, store = Rules.load(args.rules), Store(args.db)
+    args.ladder_cfg = load_ladder(args.ladder)
     if args.command == "stats":
         print(json.dumps(store.stats(), indent=2))
+        return
+    if args.command == "publish":
+        if not args.to:
+            raise SystemExit("publish needs --to PATH")
+        public = {**store.public_stats(args.delay_hours), "rules": asdict(rules),
+                  "ladder": args.ladder_cfg, "exit_tp_sl": {"tp_pct": args.tp, "sl_pct": args.sl},
+                  "data": "GeckoTerminal (geckoterminal.com), Moby, RugCheck"
+                          + (", Solana Tracker" if os.environ.get("SOLANA_TRACKER_API_KEY") else "")}
+        tmp = Path(args.to + ".tmp")
+        tmp.write_text(json.dumps(public, indent=1))
+        tmp.replace(args.to)
+        log(f"publish: wrote {args.to} ({len(public['recent'])} alerts listed)")
         return
     if args.command == "backup":
         if not args.to:

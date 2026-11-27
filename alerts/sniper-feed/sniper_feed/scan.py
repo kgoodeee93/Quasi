@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from . import sources
-from .rules import ACTIVITY, SAFETY, Rules, evaluate, passed
+from .rules import ACTIVITY, Rules, evaluate, passed
 
 MAX_DEEP_CHECKS = 8   # tokens per scan that get Moby + RugCheck lookups
 
@@ -25,17 +25,23 @@ class ScanResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def merge_safety(moby: dict, rug: dict | None) -> dict:
-    """Moby first; RugCheck fills dev holding and the authorities when Moby has no number.
-    Bundled supply comes only from RugCheck's linked-wallet networks."""
-    rug = rug or {}
+def merge_safety(moby: dict, rug: dict | None, st: dict | None = None) -> dict:
+    """One set of safety numbers from up to three sources. Where they disagree, the worse number
+    counts (the higher holding, any "authority enabled"). Bundled supply is Solana Tracker's bundle
+    measure when it has one, else RugCheck's linked-wallet networks."""
+    rug, st = rug or {}, st or {}
     out = dict(moby)
-    for key in ("dev_pct", "mint_disabled", "freeze_disabled"):
-        if out.get(key) is None and rug.get(key) is not None:
-            out[key] = rug[key]
-    out["bundled_pct"] = rug.get("bundled_pct")
+    for key in ("top10_pct", "dev_pct", "sniper_pct"):
+        values = [v for v in (moby.get(key), rug.get(key), st.get(key)) if v is not None]
+        out[key] = max(values) if values else None
+    for key in ("mint_disabled", "freeze_disabled"):
+        values = [v for v in (moby.get(key), rug.get(key), st.get(key)) if v is not None]
+        out[key] = all(values) if values else None
+    out["bundled_pct"] = st["bundled_pct"] if st.get("bundled_pct") is not None else rug.get("bundled_pct")
+    out["bundle_source"] = ("solanatracker" if st.get("bundled_pct") is not None
+                            else "rugcheck" if rug.get("bundled_pct") is not None else None)
     out["linked_wallets"] = rug.get("linked_wallets")
-    out["rugged"] = rug.get("rugged", False)
+    out["rugged"] = bool(rug.get("rugged") or st.get("rugged"))
     return out
 
 
@@ -55,7 +61,7 @@ def hard_blocks(m: dict) -> list[dict]:
 
 
 async def run_scan(client: httpx.AsyncClient, rules: Rules, moby: sources.Moby | None,
-                   skip=lambda mint: False) -> ScanResult:
+                   skip=lambda mint: False, st_key: str = "") -> ScanResult:
     res = ScanResult()
     pools = await sources.gecko_candidates(client)
     res.candidates = len(pools)
@@ -89,14 +95,17 @@ async def run_scan(client: httpx.AsyncClient, rules: Rules, moby: sources.Moby |
 
     risks = await asyncio.gather(*(safe(moby.risk(p["mint"])) if moby else asyncio.sleep(0) for p in deep))
     rugs = await asyncio.gather(*(safe(sources.rugcheck(client, p["mint"])) for p in deep))
+    sts = await asyncio.gather(*(safe(sources.solanatracker(client, p["mint"], st_key)) if st_key
+                                 else asyncio.sleep(0) for p in deep))
 
-    for p, risk, rug in zip(deep, risks, rugs):
-        for name, v in (("Moby risk", risk), ("RugCheck", rug)):
+    for p, risk, rug, st in zip(deep, risks, rugs, sts, strict=True):
+        for name, v in (("Moby risk", risk), ("RugCheck", rug), ("Solana Tracker", st)):
             if isinstance(v, Exception):
                 res.warnings.append(f"{p['symbol']}: {name} unavailable ({v})")
         m = merge_safety(sources.moby_metrics(overviews.get(p["mint"]),
                                               None if isinstance(risk, Exception) else risk),
-                         None if isinstance(rug, Exception) else rug)
+                         None if isinstance(rug, Exception) else rug,
+                         None if isinstance(st, Exception) else st)
         metrics = {**p, **m}
         checks = evaluate(metrics, rules) + hard_blocks(metrics)
         entry = {"token": p, "metrics": metrics, "checks": checks}

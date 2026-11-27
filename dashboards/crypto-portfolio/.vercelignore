@@ -1,0 +1,10 @@
+# Never upload these with `vercel deploy` from a local folder: secrets and local state.
+wallets.json
+.env
+.env.*
+.cache/
+# Not needed on Vercel
+tests/
+Dockerfile
+deploy.sh
+__pycache__/

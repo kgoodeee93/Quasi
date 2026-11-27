@@ -1,0 +1,5 @@
+.env
+state.json*
+trades.jsonl
+PAUSE
+__pycache__/

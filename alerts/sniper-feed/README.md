@@ -5,7 +5,9 @@ records what each one's price did 15 minutes, 1 hour, 4 hours and 24 hours later
 the product: nobody pays for alerts without one.
 
 The same screen also ships as a **Moby AI Trading strategy** (`strategy/moby-strategy.md`) that
-people paste into their own agent.
+people paste into their own agent, and drives the **trading bot** in `bots/solbot`, which buys
+the alerts (in dry run until you switch it live). The public **track-record page** for selling it
+lives in `web/track-record` (Vercel).
 
 ## The screen (`rules.json`)
 
@@ -16,20 +18,26 @@ people paste into their own agent.
 | Buys, 5 min | ≥ 30 | GeckoTerminal |
 | Unique buyers, 5 min | ≥ 25 | GeckoTerminal |
 | Buys ÷ sells, 5 min | ≥ 1.5 | GeckoTerminal |
-| Top 10 holders | ≤ 25% | Moby |
-| Dev holding | ≤ 5% | Moby, RugCheck if Moby has none |
-| Sniper holding | ≤ 15% | Moby |
-| Bundled supply | ≤ 5% | RugCheck: supply held by wallets linked by transfers |
-| Mint authority | disabled | Moby, RugCheck if Moby has none |
-| Freeze authority | disabled | Moby, RugCheck if Moby has none |
+| Top 10 holders | ≤ 25% | Moby, Solana Tracker |
+| Dev holding | ≤ 5% | Moby, RugCheck, Solana Tracker |
+| Sniper holding | ≤ 15% | Moby, Solana Tracker |
+| Bundled supply | ≤ 5% | Solana Tracker's bundlers; without a key, RugCheck's linked wallets |
+| Mint authority | disabled | Moby, RugCheck, Solana Tracker |
+| Freeze authority | disabled | Moby, RugCheck, Solana Tracker |
 
-A check with no data fails. Moby safety tier red, tokenized stocks, anything RugCheck calls
+Solana Tracker is optional (`SOLANA_TRACKER_API_KEY`). Where sources disagree, the worse number
+counts. A check with no data fails. Moby safety tier red, tokenized stocks, anything RugCheck calls
 rugged, and tokens with buys but not one sell in the last 5 minutes (a possible honeypot) are
-never alerted. "Bundled supply" is RugCheck's linked-wallet networks, the closest free
-measure of same-block bundles; it can read a little high for tokens with active market makers.
+never alerted. Without Solana Tracker, "bundled supply" is RugCheck's linked-wallet networks, the
+closest free measure of same-block bundles; it can read a little high for tokens with active
+market makers.
+
+Moby often has no sniper figure for a token, and missing data fails, so **without a Solana
+Tracker key expect few alerts**. With one, about 1–2 extra requests per deep-checked token
+(roughly 30k a month: the Advanced plan's 200k covers it).
 
 Each scan costs 3 GeckoTerminal calls for the candidates (trending pages 1–2 and new pools). Only tokens
-that pass the five 5-minute checks get Moby and RugCheck lookups, at most 8 per scan.
+that pass the five 5-minute checks get the safety lookups, at most 8 per scan.
 
 ## Run it
 
@@ -41,6 +49,7 @@ python -m sniper_feed scan                    # one scan: prints alerts and near
 python -m sniper_feed run --every 60          # scan + record outcomes forever, print only
 python -m sniper_feed run --every 60 --send   # ...and post to Telegram (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
 python -m sniper_feed stats                   # the track record (below)
+python -m sniper_feed publish --to stats.json # the public version, for the website (alerts only, 24h delay)
 python -m sniper_feed backup --to copy.db     # safe copy while `run` is writing
 python -m pytest -q
 ```
@@ -63,10 +72,15 @@ For each, two kinds of outcome:
 
 - **Spot returns** at 15m, 1h, 4h and 24h. Only recorded near the mark (up to 50% late plus 5
   minutes); a missed mark stays missing instead of being filled with a later price.
-- **Exit replays** (`--tp 50 --sl 25` by default): once 24 hours have passed, the 5-minute candles
-  are replayed to see whether the price reached the take-profit or the stop-loss first. A candle
-  that touches both counts as the stop. `avg_trade_pct` is the average result per trade at those
-  exits, which is what a subscriber trading every alert would have made before fees and slippage.
+- **Exit replays**: once 24 hours have passed, the 5-minute candles are replayed twice:
+  - `tp_sl` (`--tp 50 --sl 25`): did the price reach the take-profit or the stop-loss first? A
+    candle that touches both counts as the stop.
+  - `ladder` (`ladder.json`, the bot's exits): partial take-profits on the highs, stops on the
+    closes, the ratchet and the trailing runner, in the bot's order. A candle holding both a spike
+    and a −50% rug counts as the rug.
+
+  `avg_trade_pct` is the average result per trade at those exits: what a subscriber, or the bot,
+  would have made on every alert before fees and slippage.
 
 ## Deploy (always-on VM)
 
@@ -78,15 +92,23 @@ cd alerts/sniper-feed && ./deploy/deploy-vm.sh
 ```
 
 The first run asks for your Moby API key, Telegram bot token and channel id (typed, never echoed),
-stores them in Secret Manager, and sends a test message to the channel. It creates:
+stores them in Secret Manager, and sends a test message to the channel. Optional prompts (Enter to
+skip): a paid CoinGecko key, a Solana Tracker key, a private Telegram chat for the bot's trade pings
+(never the subscribers' channel), and a Jupiter key. It creates:
 
 - an e2-micro VM (the free-tier size in us-central1, us-east1 and us-west1; its external IP may cost
-  a few dollars a month), running the feed as a locked-down `sniper` user under systemd;
-- a service account that can read only those secrets and write only its backup bucket;
-- a private bucket with an hourly copy of the database (`feed.db`) and one per day (`daily/`). A
-  rebuilt VM restores from the latest copy, so the track record survives.
+  a few dollars a month), running the feed and the trading bot (**dry run**) as a locked-down
+  `sniper` user under systemd;
+- a service account that can read only those secrets and write only its buckets;
+- a private bucket with an hourly copy of the database (`feed.db`), one per day (`daily/`), and the
+  bot's positions and trade journal (`solbot/`). A rebuilt VM restores from the latest copies;
+  older copies are kept for about a week;
+- a public bucket holding only `stats.json`, the delayed public track record for the website,
+  refreshed hourly (`PUBLISH=0` to skip).
 
-Re-run it to deploy new code. `SEND=0` records without posting; `REF=branch` deploys a branch.
+Re-run it to deploy new code. `SEND=0` records without posting, `BOT=0` leaves the bot off,
+`REF=branch` deploys a branch. **The bot is in dry run on every deploy** unless that deploy says
+`BOT_LIVE=yes`, which asks for the burner wallet's key and an RPC URL and makes you type LIVE.
 
 **Telegram setup:** create a bot with @BotFather, create a private channel, add the bot as an
 admin, post one message in the channel, then open
@@ -95,8 +117,9 @@ admin, post one message in the channel, then open
 
 ## Selling it
 
-1. **Prove it first (2–4 weeks).** Run it into a private channel. Publish `stats` as-is, including
-   the losers. If `avg_trade_pct` is negative, change the rules (using `only_failed`), not the record.
+1. **Prove it first (2–4 weeks).** Run it into a private channel. The public page
+   (`web/track-record`) shows every alert as-is, losers included. If `avg_trade_pct` is negative,
+   change the rules (using `only_failed`), not the record.
 2. **Free channel, delayed.** Post each alert 15–30 minutes late with its outcome so far. This is the
    marketing.
 3. **Paid channel, real time.** Telegram channel subscriptions (Stars) or Whop / LaunchPass for card
