@@ -171,6 +171,33 @@ def test_password_gate(monkeypatch):
     assert client.get("/", auth=("anyone", "s3cret")).status_code == 200
 
 
+def test_vercel_refuses_to_serve_without_a_password(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setattr(main.settings, "dashboard_password", "")
+    client = TestClient(main.app)
+    assert client.get("/api/health").status_code == 200
+    for path in ("/", "/api/portfolio"):
+        r = client.get(path)
+        assert r.status_code == 503 and "DASHBOARD_PASSWORD" in r.text
+    monkeypatch.delenv("VERCEL")
+    assert client.get("/").status_code == 200   # local runs stay open, as before
+
+
+def test_wallets_from_an_env_var_and_vercel_cache_dir(monkeypatch, tmp_path):
+    from app.config import Settings, load_config
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WALLETS_JSON", '{"wallets": [{"label": "Env", "type": "solana", "address": "So1"}]}')
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("CACHE_DIR", raising=False)
+    s = Settings.from_env()
+    cfg = load_config(s)
+    assert [w.label for w in cfg.wallets] == ["Env"] and not cfg.demo
+    assert str(s.cache_dir) == "/tmp/crypto-portfolio-cache"
+
+
 def _encode_aggregate3_result(words: list[int | None]) -> str:
     """Build a Multicall3 aggregate3 return value: (bool success, bytes returnData)[]."""
     tuples = [[1, 64, 32, w] if w is not None else [0, 64, 0] for w in words]

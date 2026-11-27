@@ -4,6 +4,8 @@
   sells, unique buyers and volume; spot prices for the track record.
 - Moby MCP: top-10 share, dev and sniper holdings, mint and freeze authority, safety tier.
 - RugCheck: wallets linked to each other by transfers ("insider networks"), the bundle proxy.
+- Solana Tracker (optional, SOLANA_TRACKER_API_KEY): snipers, bundlers, dev and top-10 measured
+  directly, so far fewer tokens fail for "no data". About 1-2 requests per deep-checked token.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import re
 import httpx
 
 GECKO = "https://api.geckoterminal.com/api/v2"
+SOLANA_TRACKER = "https://data.solanatracker.io"
 # Same endpoints on a paid CoinGecko plan (commercial licence, higher limits): set COINGECKO_API_KEY.
 GECKO_PRO = "https://pro-api.coingecko.com/api/v3/onchain"
 RUGCHECK = "https://api.rugcheck.xyz/v1"
@@ -147,6 +150,52 @@ async def rugcheck(client: httpx.AsyncClient, mint: str) -> dict:
         raise SourceError("RugCheck rate limit")
     r.raise_for_status()
     return parse_rugcheck(r.json())
+
+
+# --- Solana Tracker (optional) -------------------------------------------------------------------
+
+def parse_solanatracker(info: dict) -> dict:
+    """A /tokens/{mint} record in the feed's metric names; None wherever it has no number."""
+    risk = info.get("risk") or {}
+    pools = [p for p in info.get("pools") or [] if isinstance(p, dict)]
+    pool = max(pools, key=lambda p: _f((p.get("liquidity") or {}).get("usd")) or 0, default=None)
+    security = (pool or {}).get("security")
+    # The docs show risks both as strings and as {name, ...} objects.
+    names = {r.get("name") if isinstance(r, dict) else str(r) for r in risk.get("risks") or []}
+
+    def disabled(key: str, risk_name: str) -> bool | None:
+        if risk_name in names:
+            return False
+        if not isinstance(security, dict) or key not in security:
+            return None
+        return security[key] is None
+
+    return {
+        "top10_pct": _f(risk.get("top10")),
+        "dev_pct": _f((risk.get("dev") or {}).get("percentage")),
+        "sniper_pct": _f((risk.get("snipers") or {}).get("totalPercentage")),
+        "bundled_pct": _f((risk.get("bundlers") or {}).get("totalPercentage")),
+        "mint_disabled": disabled("mintAuthority", "Mint Authority Enabled"),
+        "freeze_disabled": disabled("freezeAuthority", "Freeze Authority Enabled"),
+        "rugged": bool(risk.get("rugged")) or "Rugged" in names,
+    }
+
+
+async def solanatracker(client: httpx.AsyncClient, mint: str, key: str) -> dict:
+    headers = {"x-api-key": key, "accept": "application/json"}
+    r = await client.get(f"{SOLANA_TRACKER}/tokens/{mint}", headers=headers, timeout=20)
+    if r.status_code in (401, 403):
+        raise SourceError(f"Solana Tracker rejected the API key (HTTP {r.status_code})")
+    if r.status_code == 429:
+        raise SourceError("Solana Tracker rate limit or monthly quota reached")
+    r.raise_for_status()
+    m = parse_solanatracker(r.json())
+    if m["bundled_pct"] is None:
+        # The token record "may omit" bundlers even when they exist: ask the dedicated endpoint.
+        rb = await client.get(f"{SOLANA_TRACKER}/tokens/{mint}/bundlers", headers=headers, timeout=20)
+        if rb.status_code == 200:
+            m["bundled_pct"] = _f(rb.json().get("percentage"))
+    return m
 
 
 # --- Moby (read-only MCP over streamable HTTP) ---------------------------------------------------

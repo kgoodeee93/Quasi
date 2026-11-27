@@ -1,0 +1,17 @@
+{
+  "_comment": "The trading bot's exit ladder (bots/solbot/config.py), replayed for every signal. Keep the two in sync.",
+  "take_profits": [
+    {"mult": 2.0, "sell_pct": 0.15},
+    {"mult": 4.0, "sell_pct": 0.25},
+    {"mult": 8.0, "sell_pct": 0.25},
+    {"mult": 10.0, "sell_pct": 0.35}
+  ],
+  "early_stops": [
+    {"drop_pct": 0.25, "sell_pct": 0.50},
+    {"drop_pct": 0.40, "sell_pct": 1.00}
+  ],
+  "ratchet_stop_mult": {"1": 1.0, "2": 2.0, "3": 4.0},
+  "trail_runner": true,
+  "trail_pct": 0.30,
+  "hard_stop_pct": 0.50
+}

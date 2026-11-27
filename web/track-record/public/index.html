@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sniper Feed Track Record</title>
+  <meta name="description" content="Every Solana alert the sniper feed has posted, and what the price did next.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Sniper Feed</p>
+      <h1>Track record</h1>
+      <p class="lede">Every alert we've posted, and what the price did next. Alerts appear here
+        <span id="delay">24</span> hours after they're sent. Nothing is removed, losers included.</p>
+      <a id="join" class="cta" hidden>Get alerts in real time</a>
+    </header>
+
+    <section class="cards" aria-label="Summary">
+      <div class="card"><span class="label">Alerts posted</span><span class="value" id="c-count">–</span></div>
+      <div class="card"><span class="label">Avg trade, bot exits</span><span class="value" id="c-ladder">–</span><span class="note" id="c-ladder-n"></span></div>
+      <div class="card"><span class="label">Winning trades</span><span class="value" id="c-win">–</span><span class="note">bot exits</span></div>
+      <div class="card"><span class="label" id="c-tp-label">+50% before −25%</span><span class="value" id="c-tp">–</span></div>
+      <div class="card"><span class="label">Median after 1 hour</span><span class="value" id="c-1h">–</span></div>
+    </section>
+
+    <section aria-labelledby="recent-h">
+      <h2 id="recent-h">Recent alerts</h2>
+      <p class="empty" id="empty" hidden>The record starts once the first alert is old enough to show here.</p>
+      <div class="table-wrap">
+        <table id="recent" hidden>
+          <thead><tr><th>Posted</th><th>Token</th><th class="num opt">MC at alert</th><th class="num opt">1h</th>
+            <th class="num opt">24h</th><th class="num">Bot exits</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="rules-h">
+      <h2 id="rules-h">What has to pass</h2>
+      <p>An alert goes out only when a token passes every check. A check with no data fails.</p>
+      <ul id="rules" class="rules"></ul>
+      <p class="small" id="exits-explained"></p>
+    </section>
+
+    <footer>
+      <p class="small"><strong>Not financial advice.</strong> Automated screen; most new tokens go to zero.
+        Past results don't predict future ones. Returns exclude fees and slippage.</p>
+      <p class="small">Data: <a href="https://www.geckoterminal.com" rel="noopener">GeckoTerminal</a>, Moby, RugCheck.
+        <span id="updated"></span></p>
+    </footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

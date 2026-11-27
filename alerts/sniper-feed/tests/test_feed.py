@@ -9,7 +9,7 @@ from sniper_feed import sources
 from sniper_feed.notify import format_alert
 from sniper_feed.rules import ACTIVITY, Rules, evaluate, passed
 from sniper_feed.scan import run_scan
-from sniper_feed.store import Store, now, replay_exit
+from sniper_feed.store import DEFAULT_LADDER, Store, now, replay_exit, replay_ladder
 
 GOOD = "38M2z4UCfZEkUHFzD48vhKQhFhNyRGto8pZbLjNipump"
 LINKED = "Ai66LHZG9MCzg1WKdawwqduVAXpNDUuV8M3uyq5ppump"
@@ -49,9 +49,13 @@ RISK = {"status": "ok", "mint_authority_renounced": True, "freeze_authority_reno
 
 
 class Fake:
-    def __init__(self):
+    def __init__(self, risk=None):
         self.moby_tools: list[str] = []
         self.rug_calls: list[str] = []
+        self.st_calls: list[str] = []
+        self.st: dict = {}
+        self.st_bundlers: dict = {}
+        self.risk = RISK if risk is None else risk
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         url = str(req.url)
@@ -64,6 +68,12 @@ class Fake:
             mint = url.split("/tokens/")[1].split("/")[0]
             self.rug_calls.append(mint)
             return httpx.Response(200, json=RUG[mint])
+        if "solanatracker" in url:
+            self.st_calls.append(url)
+            mint = url.split("/tokens/")[1].split("/")[0]
+            if url.endswith("/bundlers"):
+                return httpx.Response(200, json={"percentage": self.st_bundlers.get(mint)})
+            return httpx.Response(200, json=self.st.get(mint) or {})
         msg = json.loads(req.content)
         if "id" not in msg:
             return httpx.Response(202)
@@ -76,17 +86,17 @@ class Fake:
                 body = {"results": [{"token_address": m, "found": True, "overview": {"overview": {
                     "top10_supply_pct": 19.0, "safety_tier": "green"}}} for m in args["token_addresses"]]}
             else:
-                body = RISK
+                body = self.risk
             result = {"content": [{"type": "text", "text": json.dumps(body)}], "structuredContent": body}
         return httpx.Response(200, text=f"data: {json.dumps({'jsonrpc': '2.0', 'id': msg['id'], 'result': result})}\n\n",
                               headers={"content-type": "text/event-stream"})
 
 
-def scan(fake, rules=Rules(), with_moby=True):
+def scan(fake, rules=Rules(), with_moby=True, st_key=""):
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(fake)) as client:
             moby = sources.Moby(client, "k") if with_moby else None
-            return await run_scan(client, rules, moby)
+            return await run_scan(client, rules, moby, st_key=st_key)
     return asyncio.run(go())
 
 
@@ -209,15 +219,18 @@ def test_near_misses_tracked_and_grouped_by_the_rule_they_failed(tmp_path):
     s.add_outcome(a, "1h", 0.002, 0.001)
     s.add_outcome(m, "1h", 0.002, 0.004)
     assert [r["id"] for r in s.exits_due()] == [a, m]  # alerts replayed first
-    s.add_exit(a, 50, 25, {"result": "sl", "minutes_to_exit": 10, "close_return_pct": None,
-                           "max_up_pct": 5, "max_down_pct": -40, "candles": 288})
-    s.add_exit(m, 50, 25, {"result": "tp", "minutes_to_exit": 30, "close_return_pct": None,
-                           "max_up_pct": 80, "max_down_pct": -5, "candles": 288})
+    s.add_exit(a, "tp_sl", {"result": "sl", "return_pct": -25, "minutes_to_exit": 10,
+                            "max_up_pct": 5, "max_down_pct": -40, "candles": 288}, {"tp_pct": 50, "sl_pct": 25})
+    s.add_exit(m, "tp_sl", {"result": "tp", "return_pct": 50, "minutes_to_exit": 30,
+                            "max_up_pct": 80, "max_down_pct": -5, "candles": 288}, {"tp_pct": 50, "sl_pct": 25})
+    s.add_exit(a, "ladder", {"result": "closed", "return_pct": -33.5, "minutes_to_exit": 40,
+                             "max_up_pct": 5, "max_down_pct": -40, "candles": 288}, {"fills": []})
     assert s.exits_due() == []
     st = s.stats()
-    assert st["alerts"]["exits"]["avg_trade_pct"] == -25 and st["misses"]["exits"]["hit_tp_pct"] == 100
+    assert st["alerts"]["exits"]["tp_sl"]["avg_trade_pct"] == -25 and st["misses"]["exits"]["tp_sl"]["hit_tp_pct"] == 100
+    assert st["alerts"]["exits"]["ladder"]["avg_trade_pct"] == -33.5 and "ladder" not in st["misses"]["exits"]
     only = st["only_failed"]["bundled_max_pct"]
-    assert only["count"] == 1 and only["1h"]["median_pct"] == 100.0 and only["exits"]["avg_trade_pct"] == 50
+    assert only["count"] == 1 and only["1h"]["median_pct"] == 100.0 and only["exits"]["tp_sl"]["avg_trade_pct"] == 50
     s.backup(str(tmp_path / "copy.db"))
     assert Store(str(tmp_path / "copy.db")).stats() == st
 
@@ -293,3 +306,109 @@ def test_gecko_retries_429_and_uses_the_paid_api_when_keyed(monkeypatch):
             await sources.gecko_get(cl, "/x", retries=1, backoff=0)
     with pytest.raises(sources.SourceError, match="rate limit"):
         asyncio.run(always_429())
+
+
+# --- the bot's exit ladder, replayed ----------------------------------------------------------
+
+def test_replay_ladder_partial_takes_then_ratchet():
+    t = 1_000_000
+    k = [c(t, 1, 2.1, 1.0, 2.05), c(t + 300, 2.05, 4.2, 2.0, 4.1), c(t + 600, 4.1, 4.1, 1.8, 1.9)]
+    r = replay_ladder(k, t, 1.0)
+    # 15% at 2x, 25% at 4x, the remaining 60% when a close (1.9x) breaks the 2x ratchet
+    assert r["result"] == "closed" and r["tps_hit"] == 2 and r["minutes_to_exit"] == 10.0
+    assert r["return_pct"] == pytest.approx((0.15 * 2 + 0.25 * 4 + 0.60 * 1.9 - 1) * 100)
+    assert [f[1] for f in r["fills"]] == ["TP1", "TP2", "ratchet"]
+
+
+def test_replay_ladder_two_step_early_stop_and_hard_stop():
+    t = 1_000_000
+    early = replay_ladder([c(t, 1, 1.05, 0.72, 0.74), c(t + 300, 0.74, 0.75, 0.58, 0.59)], t, 1.0)
+    assert early["return_pct"] == pytest.approx((0.5 * 0.74 + 0.5 * 0.59 - 1) * 100)
+    assert [f[1] for f in early["fills"]] == ["SL1", "SL2"]
+    # a candle holding both a spike and a rug counts as the rug (hard stop at -50%)
+    rug = replay_ladder([c(t, 1, 2.5, 0.3, 0.4)], t, 1.0)
+    assert (rug["result"], rug["return_pct"], rug["tps_hit"]) == ("closed", -50.0, 0)
+
+
+def test_replay_ladder_trailing_runner_and_open_positions():
+    t = 1_000_000
+    k = [c(t, 1, 2.0, 1.0, 1.9), c(t + 300, 1.9, 4.0, 1.9, 3.9), c(t + 600, 3.9, 12.0, 3.9, 11.0),
+         c(t + 900, 11.0, 11.0, 8.0, 8.3)]
+    r = replay_ladder(k, t, 1.0)
+    # TP1-3 taken, no 10x hard sell (trailing runner); the 35% runner exits when a close is
+    # 30% under the 12x peak
+    assert [f[1] for f in r["fills"]] == ["TP1", "TP2", "TP3", "trail"]
+    assert r["return_pct"] == pytest.approx((0.15 * 2 + 0.25 * 4 + 0.25 * 8 + 0.35 * 8.3 - 1) * 100)
+    still = replay_ladder([c(t, 1, 2.0, 1.0, 1.6), c(t + 300, 1.6, 1.7, 1.4, 1.5)], t, 1.0)
+    assert still["result"] == "open" and still["return_pct"] == pytest.approx((0.15 * 2 + 0.85 * 1.5 - 1) * 100)
+    assert replay_ladder([], t, 1.0) is None
+
+
+def test_ladder_json_matches_the_default():
+    from pathlib import Path
+    data = json.loads((Path(__file__).parent.parent / "ladder.json").read_text())
+    data.pop("_comment")
+    assert data == DEFAULT_LADDER
+
+
+# --- Solana Tracker (optional source) ----------------------------------------------------------
+
+def st_token(**risk):
+    base = {"top10": 18.0, "dev": {"percentage": 0.0}, "snipers": {"totalPercentage": 2.0},
+            "bundlers": {"totalPercentage": 1.0}, "risks": [], "rugged": False}
+    base.update(risk)
+    return {"token": {"mint": GOOD}, "risk": base,
+            "pools": [{"liquidity": {"usd": 1000}, "security": {"mintAuthority": "X", "freezeAuthority": None}},
+                      {"liquidity": {"usd": 200000}, "security": {"mintAuthority": None, "freezeAuthority": None}}]}
+
+
+def test_parse_solanatracker():
+    m = sources.parse_solanatracker(st_token())
+    assert (m["top10_pct"], m["sniper_pct"], m["bundled_pct"]) == (18.0, 2.0, 1.0)
+    assert m["mint_disabled"] is True and m["freeze_disabled"] is True      # the deepest pool counts
+    assert sources.parse_solanatracker(st_token(risks=["Mint Authority Enabled"]))["mint_disabled"] is False
+    assert sources.parse_solanatracker(st_token(risks=[{"name": "Rugged"}]))["rugged"] is True
+    nopool = st_token()
+    nopool["pools"] = []
+    assert sources.parse_solanatracker(nopool)["freeze_disabled"] is None   # unknown, not "disabled"
+
+
+def test_solanatracker_fills_moby_gaps_and_the_worse_number_counts():
+    no_snipers = {**RISK, "snipers_pct": None}
+    assert scan(Fake(risk=no_snipers)).alerts == []                 # Moby alone: no sniper data, no alert
+    fake = Fake(risk=no_snipers)
+    fake.st = {GOOD: st_token(), LINKED: st_token(snipers={"totalPercentage": 22.0})}
+    res = scan(fake, st_key="st-key")
+    assert [a["token"]["mint"] for a in res.alerts] == [GOOD]
+    good = res.alerts[0]["metrics"]
+    assert good["bundle_source"] == "solanatracker" and good["bundled_pct"] == 1.0   # beats RugCheck's 3%
+    linked = next(m for m in res.near_misses if m["token"]["mint"] == LINKED)
+    assert [c["rule"] for c in linked["checks"] if not c["ok"]] == ["sniper_max_pct"]
+    assert all("x-api-key" not in u for u in fake.st_calls)        # the key travels in a header
+
+
+def test_solanatracker_missing_bundlers_asks_the_dedicated_endpoint():
+    fake = Fake()
+    fake.st = {GOOD: st_token(bundlers=None), LINKED: st_token(bundlers=None)}
+    fake.st_bundlers = {GOOD: 0.4, LINKED: 9.0}
+    res = scan(fake, st_key="k")
+    assert [a["token"]["mint"] for a in res.alerts] == [GOOD]
+    assert any(u.endswith("/bundlers") for u in fake.st_calls)
+
+
+# --- public track record --------------------------------------------------------------------
+
+def test_public_stats_delay_recent_alerts_and_never_list_misses(tmp_path):
+    s = Store(str(tmp_path / "f.db"))
+    old = s.add_signal("alert", {"mint": GOOD, "symbol": "OLD", "price": 1.0, "pool": "p"}, [],
+                       at=now() - timedelta(hours=30))
+    s.add_signal("alert", {"mint": LINKED, "symbol": "FRESH", "price": 1.0}, [], at=now() - timedelta(hours=2))
+    s.add_signal("miss", {"mint": QUIET, "symbol": "MISS", "price": 1.0}, [{"rule": "x", "ok": False}],
+                 at=now() - timedelta(hours=30))
+    s.add_outcome(old, "1h", 1.0, 1.5)
+    s.add_exit(old, "ladder", {"result": "closed", "return_pct": 20.0, "minutes_to_exit": 5,
+                               "max_up_pct": 100, "max_down_pct": -1, "candles": 10}, {"fills": []})
+    pub = s.public_stats(delay_hours=24)
+    assert [r["symbol"] for r in pub["recent"]] == ["OLD"]          # FRESH is too new, MISS is never public
+    assert pub["recent"][0]["returns"] == {"1h": 50.0} and pub["recent"][0]["exits"]["ladder"]["return_pct"] == 20.0
+    assert pub["alerts"]["count"] == 2 and "misses" not in pub and "only_failed" not in pub

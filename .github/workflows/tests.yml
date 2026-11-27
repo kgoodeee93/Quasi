@@ -25,6 +25,12 @@ jobs:
           - name: sniper feed
             dir: alerts/sniper-feed
             install: pip install -r requirements-dev.txt
+          - name: trading bot
+            dir: bots/solbot
+            install: pip install -r requirements-dev.txt
+          - name: track record page
+            dir: web/track-record
+            install: pip install pytest
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -34,7 +40,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: ${{ matrix.install }}
-      - run: python -m pytest -q
+      - run: python -m pytest -q tests
       - name: deploy scripts parse
         if: matrix.name == 'sniper feed'
         run: bash -n deploy/deploy-vm.sh && bash -n deploy/vm-startup.sh

@@ -44,6 +44,11 @@ EVM_CHAINS: dict[str, dict[str, str | None]] = {
 WALLET_TYPES = {"evm", "solana", "bitcoin", "hyperliquid", "manual"}
 
 
+def on_vercel() -> bool:
+    """Vercel sets VERCEL=1 in its build and runtime environments."""
+    return os.getenv("VERCEL") == "1"
+
+
 def load_dotenv(path: Path) -> None:
     """Minimal .env loader so we don't need python-dotenv. Real env vars win."""
     if not path.exists():
@@ -65,6 +70,7 @@ class Settings:
     bitcoin_api_url: str = "https://mempool.space/api"
     vs_currency: str = "usd"
     wallets_file: Path = field(default_factory=lambda: ROOT / "wallets.json")
+    wallets_json: str = ""        # the same JSON as wallets.json, from an env var (Vercel has no secret files)
     cache_ttl: int = 60
     cache_dir: Path = field(default_factory=lambda: ROOT / ".cache")
     dashboard_password: str = ""  # set -> the whole site sits behind HTTP Basic auth
@@ -86,8 +92,10 @@ class Settings:
             bitcoin_api_url=(os.getenv("BITCOIN_API_URL") or cls.bitcoin_api_url).rstrip("/"),
             vs_currency=os.getenv("VS_CURRENCY", "usd").lower(),
             wallets_file=wallets_file,
+            wallets_json=os.getenv("WALLETS_JSON", ""),
             cache_ttl=int(os.getenv("CACHE_TTL", "60")),
-            cache_dir=Path(os.getenv("CACHE_DIR") or ROOT / ".cache"),
+            # Vercel's filesystem is read-only apart from /tmp.
+            cache_dir=Path(os.getenv("CACHE_DIR") or ("/tmp/crypto-portfolio-cache" if on_vercel() else ROOT / ".cache")),
             dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
             moby_api_key=os.getenv("MOBY_API_KEY", ""),
             moby_url=os.getenv("MOBY_MCP_URL") or cls.moby_url,
@@ -158,7 +166,9 @@ def parse_config(raw: dict) -> PortfolioConfig:
 
 
 def load_config(settings: Settings) -> PortfolioConfig:
-    """Load the user's wallets.json, or fall back to the bundled demo portfolio."""
+    """Load the user's wallets (WALLETS_JSON, else wallets.json), or fall back to the demo portfolio."""
+    if settings.wallets_json.strip():
+        return parse_config(json.loads(settings.wallets_json))
     if settings.wallets_file.exists():
         return parse_config(json.loads(settings.wallets_file.read_text()))
     cfg = parse_config(json.loads((ROOT / "demo_wallets.json").read_text()))

@@ -79,6 +79,23 @@ the free tier). Create one at [console.cloud.google.com/projectcreate](https://c
 fits inside Cloud Run's free tier. Secret Manager costs about $0.06 per secret per month beyond its
 free allowance. The first page load after it has been idle takes a few seconds (cold start).
 
+## Deploy to Vercel
+
+The same app runs on Vercel (FastAPI, detected through `index.py`).
+
+1. Vercel → **Add New → Project** → import `kgoodeee93/Quasi`, **Root Directory**
+   `dashboards/crypto-portfolio`.
+2. Environment variables:
+   - `DASHBOARD_PASSWORD` (required: on Vercel the site refuses to serve until it's set, so your
+     wallet addresses are never public)
+   - `WALLETS_JSON`: the whole contents of your `wallets.json`, pasted as one value
+   - optional: `ALCHEMY_API_KEY`, `COINGECKO_API_KEY`, `MOBY_API_KEY`
+3. Deploy. The cache lives in `/tmp` there (Vercel's disk is read-only otherwise), so the first load
+   after a quiet spell is slower.
+
+Hobby (free) is fine: this is a personal dashboard. `.vercelignore` keeps `wallets.json` and `.env`
+out of uploads if you ever deploy from your own machine with `vercel deploy`.
+
 ## What's on the dashboard
 
 **Filters (top row):** all wallets combined or one wallet at a time, asset search, hide dust (< $1),
